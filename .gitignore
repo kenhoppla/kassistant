@@ -91,3 +91,17 @@ fabric.properties
 # Built Visual Studio Code Extensions
 *.vsix
 
+
+# ---> Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+uv.lock
+
+# ---> kassistant
+*.db
+*.db-wal
+*.db-shm

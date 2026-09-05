@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up kassistant",
+        "description": "kassistant sits in front of your voice assistant. It remembers what you say and what happens as a result, so it can answer familiar commands itself later on.",
+        "data": {
+          "embed_url": "Ollama address",
+          "embed_model": "Embedding model",
+          "fallback_agent": "Agent for everything else"
+        },
+        "data_description": {
+          "embed_url": "Address of your Ollama instance, e.g. http://192.168.1.10:11434",
+          "embed_model": "Must exist in Ollama. Pull it first with: ollama pull embeddinggemma",
+          "fallback_agent": "Receives every request kassistant is not sure about. Usually your LLM agent."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No answer from Ollama. Are the address and model name correct? The model must be pulled with 'ollama pull'.",
+      "unknown": "Unexpected error. See the log for details."
+    },
+    "abort": {
+      "single_instance_allowed": "kassistant is already set up. Only one instance is supported."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "kassistant",
+        "description": "Start with 'Observe only' and let it run for a few days. Switching to 'Answer by itself' only pays off once enough cards have been collected.",
+        "data": {
+          "mode": "Mode",
+          "threshold": "Confidence threshold",
+          "learn": "Learn from the fallback agent",
+          "learn_delay": "Wait before learning"
+        },
+        "data_description": {
+          "threshold": "How similar a sentence must be to a known card before kassistant acts on its own. Higher means more cautious.",
+          "learn": "Records which actions the fallback agent triggers and turns them into new cards.",
+          "learn_delay": "Seconds spent waiting for a correction. If you follow up within that time, nothing is learned."
+        }
+      }
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "observe": "Observe only (changes nothing)",
+        "shadow": "Decide along, but do not execute",
+        "active": "Answer by itself when confident"
+      }
+    }
+  }
+}

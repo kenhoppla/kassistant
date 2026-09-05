@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Fast feedback. Deliberately runs without Home Assistant installed, which
+  # also proves the storage and matching logic stays free of HA imports.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      # An explicit virtual environment, so every later step provably runs
+      # against the same interpreter. "uv pip install --system" leaves that
+      # ambiguous on hosted runners.
+      - name: Create environment
+        run: |
+          uv venv --python 3.13
+          uv pip install numpy pytest aiohttp ruff
+
+      - name: Syntax
+        run: uv run python -m compileall -q custom_components tests
+
+      - name: Lint
+        run: uv run ruff check custom_components tests
+
+      - name: Format
+        run: uv run ruff format --check custom_components tests
+
+      - name: Unit tests
+        run: uv run pytest tests --ignore=tests/integration -q
+
+      - name: Validate JSON
+        run: |
+          uv run python - <<'PY'
+          import json, pathlib, sys
+          bad = []
+          skip = {".git", ".venv", ".pytest_cache", ".ruff_cache"}
+          for path in pathlib.Path(".").rglob("*.json"):
+              if skip & set(path.parts):
+                  continue
+              try:
+                  json.loads(path.read_text(encoding="utf-8"))
+              except json.JSONDecodeError as err:
+                  bad.append(f"{path}: {err}")
+          if bad:
+              print("\n".join(bad))
+              sys.exit(1)
+          print("JSON is valid")
+          PY
+
+      - name: Translations complete
+        run: uv run python tests/check_translations.py
+
+  # Boots a real Home Assistant. Catches API drift when a new core release
+  # renames or removes something the integration relies on.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Create environment
+        run: |
+          uv venv --python 3.13
+          uv pip install numpy pytest aiohttp
+          uv pip install homeassistant pytest-homeassistant-custom-component
+          # The conversation component pins these; the latest releases are not
+          # necessarily compatible with the Home Assistant version installed.
+          uv run python - <<'PY'
+          import json, pathlib, subprocess, sys
+          import homeassistant
+          manifest = (
+              pathlib.Path(homeassistant.__file__).parent
+              / "components" / "conversation" / "manifest.json"
+          )
+          pins = json.loads(manifest.read_text())["requirements"]
+          print("pinning:", pins)
+          subprocess.check_call(["uv", "pip", "install", *pins])
+          PY
+
+      - name: Integration tests
+        run: uv run pytest tests/integration -q

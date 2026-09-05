@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "kassistant einrichten",
+        "description": "kassistant wird deinem Sprachassistenten vorgeschaltet. Er merkt sich, was du sagst und was daraufhin passiert, und beantwortet bekannte Befehle später selbst.",
+        "data": {
+          "embed_url": "Ollama-Adresse",
+          "embed_model": "Embedding-Modell",
+          "fallback_agent": "Agent für alles Übrige"
+        },
+        "data_description": {
+          "embed_url": "Adresse deiner Ollama-Instanz, z. B. http://192.168.1.10:11434",
+          "embed_model": "Muss in Ollama vorhanden sein. Vorher laden mit: ollama pull embeddinggemma",
+          "fallback_agent": "Bekommt jede Anfrage, die kassistant nicht sicher kennt. Normalerweise dein LLM-Agent."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Keine Antwort von Ollama. Stimmen Adresse und Modellname? Das Modell muss mit „ollama pull“ geladen sein.",
+      "unknown": "Unerwarteter Fehler. Details stehen im Protokoll."
+    },
+    "abort": {
+      "single_instance_allowed": "kassistant ist bereits eingerichtet. Es wird nur eine Instanz unterstützt."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "kassistant",
+        "description": "Beginne mit „Nur mitschreiben“ und lass es ein paar Tage laufen. Erst wenn genug Karteikarten zusammengekommen sind, lohnt sich „Selbst antworten“.",
+        "data": {
+          "mode": "Betriebsart",
+          "threshold": "Sicherheitsschwelle",
+          "learn": "Vom Fallback-Agenten lernen",
+          "learn_delay": "Wartezeit vor dem Lernen"
+        },
+        "data_description": {
+          "threshold": "Wie ähnlich ein Satz einer bekannten Karte sein muss, damit kassistant selbst handelt. Höher heißt vorsichtiger.",
+          "learn": "Schreibt mit, welche Aktionen der Fallback-Agent auslöst, und legt daraus neue Karteikarten an.",
+          "learn_delay": "Sekunden, die auf einen Widerspruch gewartet wird. Hakst du in dieser Zeit nach, wird nichts gelernt."
+        }
+      }
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "observe": "Nur mitschreiben (verändert nichts)",
+        "shadow": "Mitentscheiden, aber nicht ausführen",
+        "active": "Selbst antworten, wenn sicher"
+      }
+    }
+  }
+}

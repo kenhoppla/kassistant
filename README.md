@@ -1,2 +1,148 @@
 # kassistant
 
+A learning card box in front of your voice assistant.
+
+## The problem
+
+A local LLM in Home Assistant is slow. Not because it is stupid, but because
+every request pushes the full list of your entities and their states through the
+model as text. On a CPU that easily means 20 seconds for "turn on the light" —
+a sentence you say every single evening.
+
+The usual answer to this is: buy a GPU.
+
+## The idea
+
+Most voice commands in a home are repetitions. You do not say something new
+every day, you say the same twenty things in slightly different words. That does
+not need a language model, it needs a good memory.
+
+kassistant sits in front of your existing agent and keeps index cards:
+
+```
+Front:  "Turn on the light in the living room"
+Back:   light.turn_on  →  light.living_room_ceiling
+```
+
+When a sentence comes in, it is looked up rather than reasoned about. If a card
+matches confidently, kassistant runs it directly — that takes milliseconds. If
+none does, the request is passed on to your LLM unchanged.
+
+**And kassistant takes notes while it happens.** Every action the LLM triggers is
+stored together with the sentence that caused it, as a new card. Next time the
+same command takes the fast path.
+
+So the assistant does not just get smarter over time — it gets faster.
+
+## How it works
+
+Sentences are turned into rows of numbers ("embeddings"). Similar sentences get
+similar numbers, even when the words differ. Looking one up is then a comparison
+of numbers instead of a match against text templates — which is why kassistant
+also understands rephrasings that the built-in matcher fails on.
+
+The numbers are computed by **Ollama**, which you are already running for your
+LLM. That keeps the integration itself free of heavyweight ML libraries —
+important, because Home Assistant OS runs on Alpine Linux, where no suitable
+wheels exist for onnxruntime or torch.
+
+Storage is a SQLite file in the config directory. A vector database is
+unnecessary at a few thousand cards: a dot product across the whole matrix takes
+about a millisecond.
+
+## Requirements
+
+* Home Assistant 2026.1 or newer
+* A reachable Ollama instance with an embedding model:
+  ```
+  ollama pull embeddinggemma
+  ```
+* An already configured conversation agent (Ollama, OpenAI, Google, …) to
+  receive the requests kassistant does not know
+
+## Installation
+
+1. Add this repository as a custom repository in HACS and install **kassistant**
+2. Restart Home Assistant
+3. *Settings → Devices & Services → Add Integration → kassistant*
+4. Enter the Ollama address, the embedding model and the fallback agent
+5. *Settings → Voice assistants* → set the conversation agent of your assistant
+   to **kassistant**
+
+## The three modes
+
+kassistant starts out deliberately cautious. Change this under
+*Settings → Devices & Services → kassistant → Configure*.
+
+| Mode | What happens |
+|---|---|
+| **Observe only** (start here) | Everything goes to your LLM. kassistant only collects cards. Nothing can change and nothing can break. |
+| **Shadow** | kassistant additionally decides what it *would* have done and logs it. Still nothing is executed. This lets you see how well it matches before arming it. |
+| **Active** | Confident matches are executed directly. Everything else still goes to the LLM. |
+
+Leave it in stage 1 for a few days. Without cards there is nothing to look up —
+the data has to grow out of the way you actually speak.
+
+## When kassistant does nothing
+
+The router may abstain at any time, and that is by design. A wrong but confident
+decision is more annoying than a slow one. The request is passed on when:
+
+* no sufficiently similar sentence is known (below the confidence threshold)
+* Ollama does not answer
+* the stored action cannot be executed
+
+Learning errs the same way: if you follow up immediately in the same
+conversation, the answer probably was not the one you wanted — then nothing is
+learned.
+
+## Status
+
+Early development. Working: note taking, the learning loop and lookup.
+
+Still open:
+
+* seeding from Home Assistant's built-in example sentences
+* automatic calibration of the confidence threshold
+* a localised confirmation phrase — the fast path currently answers "Ok" in
+  every language
+
+Only one instance is supported. All entries would share a single card box file
+while keeping separate in-memory indexes, and vectors from two different
+embedding models cannot be compared at all.
+
+## Development
+
+Python is provided through [uv](https://docs.astral.sh/uv/) — no system install,
+no compiling:
+
+```bash
+uv venv --python 3.13
+uv pip install numpy pytest aiohttp
+uv run pytest tests --ignore=tests/integration -q   # fast tests
+uvx ruff check custom_components tests              # linting
+uvx ruff format custom_components tests             # formatting
+```
+
+There are two test suites.
+
+**Unit tests** (`tests/`) cover the card box, the sentence normalisation and the
+vector maths. They deliberately run without Home Assistant installed — that is
+also what keeps `store.py`, `text.py` and `embeddings.py` free of HA imports.
+
+**Integration tests** (`tests/integration/`) boot a real Home Assistant and set
+the integration up in it. They are what catches API drift when a core release
+renames something, and they cover the part that cannot be reasoned about from
+the outside: kassistant calling another conversation agent from inside its own
+turn. They need more to be installed:
+
+```bash
+uv pip install homeassistant pytest-homeassistant-custom-component
+# the conversation component pins its own matcher versions
+uv pip install "hassil==3.5.0" "home-assistant-intents==2026.1.28"
+uv run pytest tests/integration -q
+```
+
+## License
+
+Apache-2.0
