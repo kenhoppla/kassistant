@@ -39,6 +39,12 @@ DEFAULT_LEARN: Final = True
 # to keep.
 DEFAULT_LEARN_DELAY: Final = 25.0
 
+# --- Services ----------------------------------------------------------------
+SERVICE_SEED: Final = "seed"
+ATTR_LANGUAGE: Final = "language"
+ATTR_MAX_PER_INTENT: Final = "max_per_intent"
+ATTR_MAX_SENTENCES: Final = "max_sentences"
+
 # --- Storage -----------------------------------------------------------------
 DB_FILENAME: Final = "kassistant.db"
 

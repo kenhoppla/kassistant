@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 
 from .embeddings import OllamaEmbeddings
 from .learn import ActionRecorder
@@ -19,3 +20,6 @@ class KassistantData:
     router: Router
     recorder: ActionRecorder
     fallback_agent: str
+    # Seeding reads every exposed entity and talks to Ollama in batches. Running
+    # two of those at once would only duplicate work and hammer the service.
+    seeding: asyncio.Lock = field(default_factory=asyncio.Lock)

@@ -1,0 +1,39 @@
+seed:
+  name: Seed the card box
+  description: >-
+    Fills the card box with Home Assistant's own example sentences for your
+    exposed devices. Runs automatically once after setup; call it again after
+    adding devices or aliases.
+  fields:
+    language:
+      name: Language
+      description: >-
+        Language code to seed. Defaults to the Home Assistant system language.
+      required: false
+      example: de
+      selector:
+        text:
+    max_per_intent:
+      name: Sentences per intent
+      description: >-
+        How many phrasings to take per command type. Higher means better
+        coverage of unusual wordings, and a longer run.
+      required: false
+      default: 12
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+    max_sentences:
+      name: Maximum sentences
+      description: >-
+        Upper limit for a single run, so a house with many devices cannot start
+        an hour-long job.
+      required: false
+      default: 4000
+      selector:
+        number:
+          min: 100
+          max: 50000
+          mode: box
