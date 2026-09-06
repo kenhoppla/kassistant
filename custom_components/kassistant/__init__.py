@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_THRESHOLD,
     DOMAIN,
 )
+from .coordinator import KassistantCoordinator
 from .data import KassistantData
 from .embeddings import EmbeddingError, OllamaEmbeddings
 from .learn import ActionRecorder
@@ -40,7 +41,7 @@ from .store import Store
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CONVERSATION]
+PLATFORMS: list[Platform] = [Platform.CONVERSATION, Platform.SENSOR]
 
 type KassistantConfigEntry = ConfigEntry[KassistantData]
 
@@ -90,6 +91,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: KassistantConfigEntry) -
         recorder=recorder,
         fallback_agent=entry.data[CONF_FALLBACK_AGENT],
     )
+
+    # Built before the platforms are set up, because the sensors take it from
+    # the runtime data as they are created.
+    entry.runtime_data.coordinator = KassistantCoordinator(hass, entry.runtime_data)
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

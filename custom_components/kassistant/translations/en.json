@@ -14,6 +14,20 @@
           "embed_model": "Must exist in Ollama. Pull it first with: ollama pull embeddinggemma",
           "fallback_agent": "Receives every request kassistant is not sure about. Usually your LLM agent."
         }
+      },
+      "reconfigure": {
+        "title": "Change kassistant connection",
+        "description": "Point kassistant at a different Ollama instance, embedding model or fallback agent. The card box is kept.",
+        "data": {
+          "embed_url": "Ollama address",
+          "embed_model": "Embedding model",
+          "fallback_agent": "Agent for everything else"
+        },
+        "data_description": {
+          "embed_url": "Address of your Ollama instance, e.g. http://192.168.1.10:11434",
+          "embed_model": "Changing this invalidates every stored vector; the cards stay but have to be embedded again.",
+          "fallback_agent": "Receives every request kassistant is not sure about."
+        }
       }
     },
     "error": {
@@ -21,7 +35,8 @@
       "unknown": "Unexpected error. See the log for details."
     },
     "abort": {
-      "single_instance_allowed": "kassistant is already set up. Only one instance is supported."
+      "single_instance_allowed": "kassistant is already set up. Only one instance is supported.",
+      "reconfigure_successful": "kassistant now uses the new connection."
     }
   },
   "options": {
@@ -56,6 +71,16 @@
     "seed_failed": {
       "title": "kassistant could not fill its card box",
       "description": "kassistant fills its card box from Home Assistant's own example sentences, but the attempt failed — usually because the embedding service is unreachable.\n\nCheck that Ollama is running at the configured address and that the embedding model is pulled. Until this works kassistant has nothing to look up, so every request goes to your slow fallback agent.\n\nIt retries by itself whenever your exposed devices change, or you can run the action **kassistant: Seed the card box**."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "cards": {
+        "name": "Cards"
+      },
+      "handled": {
+        "name": "Recognised"
+      }
     }
   }
 }

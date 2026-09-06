@@ -14,6 +14,20 @@
           "embed_model": "Muss in Ollama vorhanden sein. Vorher laden mit: ollama pull embeddinggemma",
           "fallback_agent": "Bekommt jede Anfrage, die kassistant nicht sicher kennt. Normalerweise dein LLM-Agent."
         }
+      },
+      "reconfigure": {
+        "title": "kassistant-Verbindung ändern",
+        "description": "Richte kassistant auf eine andere Ollama-Instanz, ein anderes Embedding-Modell oder einen anderen Fallback-Agenten. Der Karteikasten bleibt erhalten.",
+        "data": {
+          "embed_url": "Ollama-Adresse",
+          "embed_model": "Embedding-Modell",
+          "fallback_agent": "Agent für alles Übrige"
+        },
+        "data_description": {
+          "embed_url": "Adresse deiner Ollama-Instanz, z. B. http://192.168.1.10:11434",
+          "embed_model": "Eine Änderung entwertet alle gespeicherten Vektoren; die Karten bleiben, müssen aber neu berechnet werden.",
+          "fallback_agent": "Bekommt jede Anfrage, die kassistant nicht sicher kennt."
+        }
       }
     },
     "error": {
@@ -21,7 +35,8 @@
       "unknown": "Unerwarteter Fehler. Details stehen im Protokoll."
     },
     "abort": {
-      "single_instance_allowed": "kassistant ist bereits eingerichtet. Es wird nur eine Instanz unterstützt."
+      "single_instance_allowed": "kassistant ist bereits eingerichtet. Es wird nur eine Instanz unterstützt.",
+      "reconfigure_successful": "kassistant nutzt jetzt die neue Verbindung."
     }
   },
   "options": {
@@ -56,6 +71,16 @@
     "seed_failed": {
       "title": "kassistant konnte den Karteikasten nicht füllen",
       "description": "kassistant füllt seinen Karteikasten aus den Beispielsätzen, die Home Assistant mitbringt — der Versuch ist fehlgeschlagen, meist weil der Embedding-Dienst nicht erreichbar ist.\n\nPrüfe, ob Ollama unter der eingetragenen Adresse läuft und das Embedding-Modell geladen ist. Solange das nicht klappt, hat kassistant nichts zum Nachschlagen und jede Anfrage geht an deinen langsamen Fallback-Agenten.\n\nEs versucht es von selbst erneut, sobald sich deine freigegebenen Geräte ändern — oder du führst die Aktion **kassistant: Seed the card box** aus."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "cards": {
+        "name": "Karteikarten"
+      },
+      "handled": {
+        "name": "Erkannt"
+      }
     }
   }
 }

@@ -18,6 +18,13 @@ _LOGGER = logging.getLogger(__name__)
 
 _TIMEOUT = ClientTimeout(total=30)
 
+# How long Ollama should keep the embedding model resident after a request.
+# Without this it is evicted after a few minutes of quiet, and the first voice
+# command of the day pays two seconds to reload it instead of ninety
+# milliseconds. The model is small -- a few hundred megabytes -- so keeping it
+# around is cheap, and the hour expires on its own.
+KEEP_ALIVE = "1h"
+
 
 class EmbeddingError(Exception):
     """The embedding service was unreachable or returned something unusable."""
@@ -50,7 +57,11 @@ class OllamaEmbeddings:
         if not texts:
             raise ValueError("embed() called without texts")
 
-        payload = {"model": self._model, "input": list(texts)}
+        payload = {
+            "model": self._model,
+            "input": list(texts),
+            "keep_alive": KEEP_ALIVE,
+        }
 
         try:
             async with self._session.post(

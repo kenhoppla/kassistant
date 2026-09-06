@@ -40,6 +40,7 @@ from .const import (
     MODE_OBSERVE,
 )
 from .data import KassistantData
+from .entity import device_info
 from .router import TIER_OBSERVE, Decision
 from .store import SOURCE_LEARNED
 
@@ -69,16 +70,17 @@ async def async_setup_entry(
 class KassistantAgent(conversation.ConversationEntity):
     """Front-line agent with a card box and a learning loop."""
 
-    # No device is created for this entry, so the entity carries its own name.
-    # With has_entity_name the name would come from a device, and without one
-    # Home Assistant falls back to the unique id -- which would leave users with
-    # an entity called conversation.kassistant_01m1sdqdby2y83aqzz0ezt04mk.
-    _attr_name = "kassistant"
+    # The name comes from the device. Getting this wrong once produced an
+    # entity called conversation.kassistant_01m1sdqdby2y83aqzz0ezt04mk: with
+    # has_entity_name and no device, Home Assistant falls back to the unique id.
+    _attr_has_entity_name = True
+    _attr_name = None
     _attr_supported_features = conversation.ConversationEntityFeature.CONTROL
 
     def __init__(self, entry: ConfigEntry) -> None:
         self._entry = entry
         self._attr_unique_id = entry.entry_id
+        self._attr_device_info = device_info(entry)
         # Per conversation, the scheduled learning job, so an immediate
         # follow-up question can cancel it.
         self._pending_learn: dict[str, Any] = {}

@@ -12,6 +12,7 @@ from .router import Router
 from .store import Store
 
 if TYPE_CHECKING:
+    from .coordinator import KassistantCoordinator
     from .seed import SeedScheduler
 
 
@@ -26,6 +27,8 @@ class KassistantData:
     fallback_agent: str
     # Set right after construction; the scheduler needs the data object itself.
     scheduler: SeedScheduler | None = None
+    # Shared by the diagnostic sensors so they read the card box once, not twice.
+    coordinator: KassistantCoordinator | None = None
     # Seeding reads every exposed entity and talks to Ollama in batches. Running
     # two of those at once would only duplicate work and hammer the service.
     seeding: asyncio.Lock = field(default_factory=asyncio.Lock)

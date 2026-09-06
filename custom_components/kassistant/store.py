@@ -30,7 +30,6 @@ _LOGGER = logging.getLogger(__name__)
 
 SOURCE_LEARNED = "learned"
 SOURCE_SEED = "seed"
-SOURCE_MANUAL = "manual"
 
 # Starting size of the index buffers; they double from here.
 _INITIAL_CAPACITY = 256
@@ -323,6 +322,59 @@ class Store:
                 "SELECT norm, action FROM examples WHERE language = ?", (language,)
             ).fetchall()
         return {(row["norm"], row["action"]) for row in rows}
+
+    def decision_stats(self, window: int = 200) -> dict[str, Any]:
+        """How kassistant has been deciding lately.
+
+        This is the instrument for the one judgement call the user has to make:
+        whether the confidence threshold is set right for their own speech. It
+        counts what kassistant *decided*, not what it executed, so the numbers
+        mean the same thing in observe, shadow and active mode -- which is the
+        whole point of being able to watch before arming it.
+        """
+        conn = self._require_conn()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT tier, score, latency_ms FROM decisions ORDER BY id DESC LIMIT ?",
+                (window,),
+            ).fetchall()
+
+        if not rows:
+            return {"sampled": 0, "handled": 0, "handled_pct": None, "avg_score": None}
+
+        tiers: dict[str, int] = {}
+        for row in rows:
+            tiers[row["tier"]] = tiers.get(row["tier"], 0) + 1
+
+        handled = tiers.get("fastpath", 0)
+        scores = [row["score"] for row in rows if row["score"] is not None]
+        latencies = [row["latency_ms"] for row in rows if row["latency_ms"] is not None]
+
+        return {
+            "sampled": len(rows),
+            "handled": handled,
+            "handled_pct": round(100 * handled / len(rows), 1),
+            "avg_score": round(sum(scores) / len(scores), 3) if scores else None,
+            "avg_latency_ms": round(sum(latencies) / len(latencies))
+            if latencies
+            else None,
+            "tiers": tiers,
+        }
+
+    def card_stats(self) -> dict[str, Any]:
+        """Where the cards came from."""
+        conn = self._require_conn()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT source, COUNT(*) AS n FROM examples GROUP BY source"
+            ).fetchall()
+            indexed = self._count
+        by_source = {row["source"]: row["n"] for row in rows}
+        return {
+            "total": sum(by_source.values()),
+            "searchable": indexed,
+            "by_source": by_source,
+        }
 
     def examples_without_embedding(self, limit: int = 256) -> list[sqlite3.Row]:
         """Cards still missing a vector -- e.g. because Ollama was down."""

@@ -547,6 +547,12 @@ class SeedScheduler:
         await self.async_backfill()
         await self.async_report_health()
 
+        # Seeding moves the card count by hundreds at once. Waiting for the next
+        # poll would leave the diagnostic sensor reading zero for a minute right
+        # after setup, which is exactly when someone is looking at it.
+        if (coordinator := self._data.coordinator) is not None:
+            await coordinator.async_request_refresh()
+
     async def async_backfill(self) -> None:
         """Give vectors to cards that were stored without one."""
         store = self._data.store
