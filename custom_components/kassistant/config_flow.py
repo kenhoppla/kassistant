@@ -45,8 +45,12 @@ STEP_USER_SCHEMA = vol.Schema(
         vol.Required(
             CONF_EMBED_MODEL, default=DEFAULT_EMBED_MODEL
         ): selector.TextSelector(),
-        vol.Required(CONF_FALLBACK_AGENT): selector.ConversationAgentSelector(
-            selector.ConversationAgentSelectorConfig()
+        # An entity selector, not ConversationAgentSelector: the latter exists in
+        # the backend but the frontend has no renderer for it inside a config
+        # flow, and one unrenderable field blanks the whole dialog. Every modern
+        # conversation agent is an entity anyway, Home Assistant's own included.
+        vol.Required(CONF_FALLBACK_AGENT): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="conversation")
         ),
     }
 )
