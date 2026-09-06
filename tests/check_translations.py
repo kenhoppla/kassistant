@@ -23,6 +23,35 @@ def keys(node: object, prefix: str = "") -> set[str]:
     return found
 
 
+def translation_keys_are_wired() -> list[str]:
+    """Entity translations must match the keys the code actually uses.
+
+    Writing a translated name without pointing an entity at it is invisible:
+    the file looks complete, every language agrees, and the name never shows up
+    anywhere. The reverse -- a key in the code with no translation -- leaves a
+    blank name in the interface.
+    """
+    used: set[str] = set()
+    for source in COMPONENT.glob("*.py"):
+        for line in source.read_text(encoding="utf-8").splitlines():
+            if "_attr_translation_key" in line and "=" in line:
+                value = line.split("=", 1)[1].strip().strip("\"'")
+                if value and not value.startswith("_"):
+                    used.add(value)
+
+    strings = json.loads((COMPONENT / "strings.json").read_text(encoding="utf-8"))
+    declared = {
+        key for platform in strings.get("entity", {}).values() for key in platform
+    }
+
+    problems = []
+    if missing := used - declared:
+        problems.append(f"used in code but not translated: {sorted(missing)}")
+    if unused := declared - used:
+        problems.append(f"translated but never used: {sorted(unused)}")
+    return problems
+
+
 def main() -> int:
     reference = json.loads((COMPONENT / "strings.json").read_text(encoding="utf-8"))
     expected = keys(reference)
@@ -39,6 +68,8 @@ def main() -> int:
             problems.append(f"{path.name}: missing {sorted(missing)}")
         if extra := actual - expected:
             problems.append(f"{path.name}: unknown {sorted(extra)}")
+
+    problems.extend(translation_keys_are_wired())
 
     if problems:
         print("\n".join(problems))

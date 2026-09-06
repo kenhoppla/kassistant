@@ -45,3 +45,15 @@ def test_dot_product_of_identical_vectors_is_one() -> None:
     matrix = normalize_rows(np.array([[2.0, 7.0, 1.0]], dtype=np.float32))
 
     assert float(matrix[0] @ matrix[0]) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_the_model_is_asked_to_stay_loaded() -> None:
+    """Ollama evicts idle models after a few minutes.
+
+    Without keep_alive the first voice command after a quiet spell pays a
+    two-second reload instead of ninety milliseconds -- precisely the moment it
+    is supposed to feel instant.
+    """
+    embeddings = load("embeddings")
+
+    assert embeddings.KEEP_ALIVE

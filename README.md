@@ -105,6 +105,32 @@ kassistant starts out deliberately cautious. Change this under
 Leave it in stage 1 for a few days. Without cards there is nothing to look up —
 the data has to grow out of the way you actually speak.
 
+## Watching it before you arm it
+
+Two diagnostic sensors show whether it is worth switching to active mode:
+
+| Sensor | What it tells you |
+|---|---|
+| **kassistant cards** | How much it knows. Attributes split this into `seeded` and `learned`, and show how many are `searchable` — a gap means the embedding service was down while they were stored. |
+| **kassistant recognised** | The share of recent requests it recognised confidently. This is the number to watch. |
+
+The second one counts *decisions*, not executions, so it means the same thing in
+every mode — which is the point of being able to watch before arming anything.
+Its `average_score` attribute is the other half: compare it with your configured
+threshold. Far below means the threshold is out of reach; hovering just under it
+means it is set slightly too high.
+
+Switch to active when the recognised share stops climbing.
+
+## Changing the connection later
+
+*Settings → Devices & Services → kassistant → ⋮ → Reconfigure* changes the Ollama
+address, the embedding model or the fallback agent without losing the card box.
+
+Changing the embedding model invalidates every stored vector — the cards remain
+but have to be embedded again, and the sensor's `searchable` count will show that
+until they are.
+
 ## When kassistant does nothing
 
 The router may abstain at any time, and that is by design. A wrong but confident

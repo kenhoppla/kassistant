@@ -29,7 +29,7 @@ def test_all_modules_import() -> None:
     )
     from kassistant import conversation as agent_module  # noqa: F401
 
-    assert kassistant.PLATFORMS == [Platform.CONVERSATION]
+    assert kassistant.PLATFORMS == [Platform.CONVERSATION, Platform.SENSOR]
 
 
 def test_config_flow_is_registered() -> None:
@@ -83,3 +83,27 @@ def test_selectors_exist() -> None:
 
 def test_supported_languages_constant() -> None:
     assert MATCH_ALL == "*"
+
+
+def test_the_service_description_matches_the_service() -> None:
+    """services.yaml is what the user sees in the interface.
+
+    It is written by hand next to the real schema, so the two drift apart
+    silently -- a field renamed in one place keeps working while the form in
+    the interface offers the wrong thing.
+    """
+    import pathlib
+
+    import kassistant
+    import yaml
+
+    described = yaml.safe_load(
+        (pathlib.Path(kassistant.__file__).parent / "services.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    fields = described["seed"]["fields"]
+
+    assert set(fields) == {str(key) for key in kassistant.SEED_SCHEMA.schema}
+    assert fields["max_per_intent"]["default"] == kassistant.DEFAULT_MAX_PER_INTENT
+    assert fields["max_sentences"]["default"] == kassistant.DEFAULT_MAX_SENTENCES

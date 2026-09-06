@@ -144,3 +144,94 @@ async def test_every_field_can_be_rendered_by_the_frontend(
     for field in fields:
         kind = next(iter(field["selector"]))
         assert kind in renderable, f"{field['name']} uses unrenderable {kind!r}"
+
+
+async def test_the_connection_can_be_changed_afterwards(
+    hass: HomeAssistant, custom_integration, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Moving Ollama to another machine must not mean losing the card box.
+
+    The address lives in the entry data, so without a reconfigure step the only
+    way to correct a typo would be deleting and re-adding the integration.
+    """
+    new_url = "http://192.168.1.50:11434"
+    aioclient_mock.post(f"{new_url}/api/embed", json={"embeddings": [[1.0, 0.0]]})
+
+    entry = MockConfigEntry(domain="kassistant", data=INPUT)
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**INPUT, "embed_url": new_url}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data["embed_url"] == new_url
+
+
+async def test_a_bad_address_is_rejected_on_reconfigure_too(
+    hass: HomeAssistant, custom_integration, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The old settings must survive a failed attempt."""
+    bad_url = "http://192.168.1.99:11434"
+    aioclient_mock.post(f"{bad_url}/api/embed", exc=TimeoutError())
+
+    entry = MockConfigEntry(domain="kassistant", data=INPUT)
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**INPUT, "embed_url": bad_url}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+    assert entry.data["embed_url"] == URL
+
+
+async def test_reconfigure_does_not_offer_kassistant_as_its_own_fallback(
+    hass: HomeAssistant, custom_integration, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Picking itself would make kassistant call itself forever."""
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+    from homeassistant.helpers import entity_registry as er
+
+    aioclient_mock.post(f"{URL}/api/embed", json={"embeddings": [[1.0, 0.0]]})
+    entry = MockConfigEntry(domain="kassistant", data=INPUT)
+    entry.add_to_hass(hass)
+
+    # Stand in for the agent a loaded entry would have registered.
+    er.async_get(hass).async_get_or_create(
+        "conversation", "kassistant", entry.entry_id, suggested_object_id="kassistant"
+    )
+
+    result = await entry.start_reconfigure_flow(hass)
+    fields = voluptuous_serialize.convert(
+        result["data_schema"], custom_serializer=cv.custom_serializer
+    )
+    agent = next(f for f in fields if f["name"] == "fallback_agent")
+
+    assert agent["selector"]["entity"]["exclude_entities"] == [
+        "conversation.kassistant"
+    ]
+
+
+async def test_the_first_setup_form_has_nothing_to_exclude(
+    hass: HomeAssistant, custom_integration
+) -> None:
+    """Before setup there is no own agent, so the list stays unfiltered."""
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+
+    result = await start(hass)
+    fields = voluptuous_serialize.convert(
+        result["data_schema"], custom_serializer=cv.custom_serializer
+    )
+    agent = next(f for f in fields if f["name"] == "fallback_agent")
+
+    assert "exclude_entities" not in agent["selector"]["entity"]
