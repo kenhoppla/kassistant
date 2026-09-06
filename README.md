@@ -68,6 +68,28 @@ about a millisecond.
 4. Enter the Ollama address, the embedding model and the fallback agent
 5. *Settings → Voice assistants* → set the conversation agent of your assistant
    to **kassistant**
+That is all. kassistant fills its own card box.
+
+## The card box fills itself
+
+On startup, and again whenever your exposed devices change, kassistant takes
+Home Assistant's own example sentences — the curated, human-written ones its
+built-in matcher uses — and turns them into cards for the devices you have
+exposed to Assist. So it knows something on day one instead of after a
+fortnight of talking to it.
+
+This only ever *writes* cards. It never acts on them: the agent still obeys the
+mode you configured, so an automatic fill cannot cause anything to happen in
+your home.
+
+Repeat runs are cheap. Sentences already in the box are dropped before anything
+reaches Ollama, so expose a new lamp and only its sentences get embedded.
+
+There is an action, **kassistant: Seed the card box**, for two cases: widening
+the sample (`max_per_intent`), and retrying after Ollama was unreachable. If a
+fill leaves the box unsearchable — cards stored but no vectors, because the
+embedding service was down — Home Assistant shows a repair notice, and the
+missing vectors are filled in automatically once Ollama answers again.
 
 ## The three modes
 
@@ -98,11 +120,10 @@ learned.
 
 ## Status
 
-Early development. Working: note taking, the learning loop and lookup.
+Early development. Working: seeding, note taking, the learning loop and lookup.
 
 Still open:
 
-* seeding from Home Assistant's built-in example sentences
 * automatic calibration of the confidence threshold
 * a localised confirmation phrase — the fast path currently answers "Ok" in
   every language

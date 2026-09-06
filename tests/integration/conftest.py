@@ -50,6 +50,28 @@ def link_into_test_config() -> object:
         target.unlink()
 
 
+@pytest.fixture(autouse=True)
+def fresh_card_box() -> object:
+    """Give every test an empty card box.
+
+    kassistant stores its database in Home Assistant's config directory, which
+    is correct in production but is a fixed, shared folder under pytest. Without
+    this, cards pile up from test to test -- and across whole pytest runs, which
+    makes assertions about how many cards were stored quietly meaningless.
+    """
+    from pytest_homeassistant_custom_component.common import get_test_config_dir
+
+    config_dir = pathlib.Path(get_test_config_dir())
+
+    def wipe() -> None:
+        for leftover in config_dir.glob("kassistant.db*"):
+            leftover.unlink()
+
+    wipe()
+    yield
+    wipe()
+
+
 @pytest.fixture
 def custom_integration(enable_custom_integrations: None) -> None:
     """Home Assistant refuses to load custom components in tests without this.

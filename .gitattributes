@@ -1,0 +1,10 @@
+# Home Assistant runs on Linux, so everything in this repository stays LF no
+# matter what a contributor's core.autocrlf happens to be set to. Without this,
+# a checkout on Windows silently rewrites every file and the next commit carries
+# CRLF into the integration.
+* text=auto eol=lf
+
+# Keep these byte-for-byte.
+*.png binary
+*.jpg binary
+*.ico binary

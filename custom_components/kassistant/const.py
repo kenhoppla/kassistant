@@ -48,6 +48,10 @@ ATTR_MAX_SENTENCES: Final = "max_sentences"
 # --- Storage -----------------------------------------------------------------
 DB_FILENAME: Final = "kassistant.db"
 
+# Raised when the card box could not be filled -- almost always because the
+# embedding service is unreachable, which the user has to fix.
+ISSUE_SEED_FAILED: Final = "seed_failed"
+
 # Service calls in these domains never count as a learned action. They are the
 # side noise of speaking a reply, not something the user asked for.
 IGNORED_ACTION_DOMAINS: Final = frozenset(

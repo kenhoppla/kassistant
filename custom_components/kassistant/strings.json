@@ -51,5 +51,11 @@
         "active": "Answer by itself when confident"
       }
     }
+  },
+  "issues": {
+    "seed_failed": {
+      "title": "kassistant could not fill its card box",
+      "description": "kassistant fills its card box from Home Assistant's own example sentences, but the attempt failed — usually because the embedding service is unreachable.\n\nCheck that Ollama is running at the configured address and that the embedding model is pulled. Until this works kassistant has nothing to look up, so every request goes to your slow fallback agent.\n\nIt retries by itself whenever your exposed devices change, or you can run the action **kassistant: Seed the card box**."
+    }
   }
 }

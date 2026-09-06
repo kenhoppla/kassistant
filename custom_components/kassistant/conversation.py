@@ -15,6 +15,7 @@ Step 3 is why kassistant gets faster over time.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -81,6 +82,9 @@ class KassistantAgent(conversation.ConversationEntity):
         # Per conversation, the scheduled learning job, so an immediate
         # follow-up question can cancel it.
         self._pending_learn: dict[str, Any] = {}
+        # Learning jobs already running. They write to the card box, so teardown
+        # waits for them -- otherwise they land in a closed database.
+        self._learning: set[asyncio.Task[None]] = set()
 
     @property
     def supported_languages(self) -> list[str] | str:
@@ -294,7 +298,12 @@ class KassistantAgent(conversation.ConversationEntity):
         )
 
         if observed and self._entry.options.get(CONF_LEARN, DEFAULT_LEARN):
-            self._schedule_learn(user_input, language, observed, decision_id)
+            # Use the conversation id Home Assistant handed back, not the one
+            # that came in: a first utterance arrives without one, and a
+            # follow-up would then be unable to cancel this.
+            self._schedule_learn(
+                user_input, language, observed, decision_id, result.conversation_id
+            )
 
         return result
 
@@ -305,6 +314,7 @@ class KassistantAgent(conversation.ConversationEntity):
         language: str,
         observed: list[dict[str, Any]],
         decision_id: int,
+        conversation_id: str | None,
     ) -> None:
         """Remember the sentence -- but only if no objection follows shortly.
 
@@ -312,17 +322,19 @@ class KassistantAgent(conversation.ConversationEntity):
         answer probably was not what they wanted. Then we prefer to learn
         nothing. This is deliberately cautious: a missing card only costs time,
         a wrong one costs trust.
+
+        A one-shot voice command carries no conversation id on the way in, so
+        the key comes from the id Home Assistant assigned on the way out -- that
+        is the one a follow-up will arrive with. The context id is only a last
+        resort, and cancellation cannot work in that case.
         """
-        conversation_id = user_input.conversation_id
-        if conversation_id is None:
-            return
+        key = conversation_id or user_input.context.id
 
         delay = float(self._entry.options.get(CONF_LEARN_DELAY, DEFAULT_LEARN_DELAY))
         utterance = user_input.text
         action = {"type": ACTION_TYPE_ACTIONS, "actions": observed}
 
-        async def _store(_now: Any) -> None:
-            self._pending_learn.pop(conversation_id, None)
+        async def _learn() -> None:
             example_id = await self._data.router.remember(
                 utterance=utterance,
                 language=language,
@@ -335,9 +347,16 @@ class KassistantAgent(conversation.ConversationEntity):
                     self._data.store.attach_observation, decision_id, action
                 )
 
-        self._pending_learn[conversation_id] = async_call_later(
-            self.hass, delay, _store
-        )
+        @callback
+        def _fire(_now: Any) -> None:
+            # Track the job, because it writes to the card box: teardown has to
+            # be able to wait for it before the database is closed.
+            self._pending_learn.pop(key, None)
+            task = self.hass.async_create_task(_learn(), eager_start=False)
+            self._learning.add(task)
+            task.add_done_callback(self._learning.discard)
+
+        self._pending_learn[key] = async_call_later(self.hass, delay, _fire)
 
     @callback
     def _cancel_pending_learn(self, conversation_id: str | None) -> None:
@@ -365,9 +384,18 @@ class KassistantAgent(conversation.ConversationEntity):
         )
 
     async def async_will_remove_from_hass(self) -> None:
+        """Stop learning and wait for anything already writing.
+
+        Runs before the config entry closes the card box, so a job in flight
+        must finish here rather than into a database that is about to go away.
+        """
         for cancel in self._pending_learn.values():
             cancel()
         self._pending_learn.clear()
+
+        if self._learning:
+            await asyncio.gather(*self._learning, return_exceptions=True)
+            self._learning.clear()
 
 
 def _log_decision(store, fields: dict[str, Any]) -> int:

@@ -51,5 +51,11 @@
         "active": "Selbst antworten, wenn sicher"
       }
     }
+  },
+  "issues": {
+    "seed_failed": {
+      "title": "kassistant konnte den Karteikasten nicht füllen",
+      "description": "kassistant füllt seinen Karteikasten aus den Beispielsätzen, die Home Assistant mitbringt — der Versuch ist fehlgeschlagen, meist weil der Embedding-Dienst nicht erreichbar ist.\n\nPrüfe, ob Ollama unter der eingetragenen Adresse läuft und das Embedding-Modell geladen ist. Solange das nicht klappt, hat kassistant nichts zum Nachschlagen und jede Anfrage geht an deinen langsamen Fallback-Agenten.\n\nEs versucht es von selbst erneut, sobald sich deine freigegebenen Geräte ändern — oder du führst die Aktion **kassistant: Seed the card box** aus."
+    }
   }
 }

@@ -2,8 +2,9 @@ seed:
   name: Seed the card box
   description: >-
     Fills the card box with Home Assistant's own example sentences for your
-    exposed devices. Runs automatically once after setup; call it again after
-    adding devices or aliases.
+    exposed devices. This happens by itself on startup and whenever your exposed
+    devices change, so you only need this to widen the sample or to retry after
+    the embedding service was unreachable.
   fields:
     language:
       name: Language

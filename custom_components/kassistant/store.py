@@ -32,6 +32,9 @@ SOURCE_LEARNED = "learned"
 SOURCE_SEED = "seed"
 SOURCE_MANUAL = "manual"
 
+# Starting size of the index buffers; they double from here.
+_INITIAL_CAPACITY = 256
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -97,9 +100,14 @@ class Store:
         self._path = path
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
-        # Search index: parallel arrays of row ids and their vectors.
+        # Search index: parallel arrays of row ids and their vectors, held in
+        # buffers that grow by doubling. Appending row by row into an exactly
+        # sized array copies the whole thing every time -- measured at six
+        # seconds for four thousand cards, against a tenth of a second for the
+        # database writes themselves.
         self._ids: np.ndarray = np.zeros((0,), dtype=np.int64)
         self._matrix: np.ndarray = np.zeros((0, 0), dtype=np.float32)
+        self._count = 0
 
     # -- Lifecycle ------------------------------------------------------------
 
@@ -249,7 +257,7 @@ class Store:
         Doing it properly means carrying the language in the index.
         """
         with self._lock:
-            if self._matrix.shape[0] == 0:
+            if self._count == 0:
                 return None
             if self._matrix.shape[1] != vector.shape[0]:
                 _LOGGER.warning(
@@ -260,7 +268,7 @@ class Store:
                 )
                 return None
 
-            scores = self._matrix @ vector.astype(np.float32)
+            scores = self._matrix[: self._count] @ vector.astype(np.float32)
             best = int(np.argmax(scores))
             example_id = int(self._ids[best])
             score = float(scores[best])
@@ -297,8 +305,24 @@ class Store:
             decisions = conn.execute("SELECT COUNT(*) AS n FROM decisions").fetchone()[
                 "n"
             ]
-            indexed = int(self._matrix.shape[0])
+            indexed = self._count
         return {"examples": examples, "decisions": decisions, "indexed": indexed}
+
+    def known_keys(self, language: str) -> set[tuple[str, str]]:
+        """Every ``(norm, action)`` pair already stored for a language.
+
+        Seeding uses this to skip sentences it has stored before. Without it a
+        repeated run would send thousands of sentences to the embedding service
+        only to throw the answers away at the duplicate check -- which is the
+        difference between reseeding being cheap enough to do automatically and
+        being something the user has to be asked about.
+        """
+        conn = self._require_conn()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT norm, action FROM examples WHERE language = ?", (language,)
+            ).fetchall()
+        return {(row["norm"], row["action"]) for row in rows}
 
     def examples_without_embedding(self, limit: int = 256) -> list[sqlite3.Row]:
         """Cards still missing a vector -- e.g. because Ollama was down."""
@@ -334,6 +358,7 @@ class Store:
         if not rows:
             self._ids = np.zeros((0,), dtype=np.int64)
             self._matrix = np.zeros((0, 0), dtype=np.float32)
+            self._count = 0
             return
 
         vectors = [np.frombuffer(row["embedding"], dtype=np.float32) for row in rows]
@@ -352,19 +377,34 @@ class Store:
 
         self._ids = np.asarray([i for i, _ in keep], dtype=np.int64)
         self._matrix = np.vstack([v for _, v in keep]).astype(np.float32)
+        self._count = len(keep)
 
     def _append_to_index(self, example_id: int, embedding: np.ndarray) -> None:
         """Append one vector to the index. The caller holds ``self._lock``."""
-        vector = embedding.astype(np.float32).reshape(1, -1)
-        if self._matrix.shape[0] == 0:
-            self._matrix = vector
-            self._ids = np.asarray([example_id], dtype=np.int64)
-            return
-        if self._matrix.shape[1] != vector.shape[1]:
+        vector = embedding.astype(np.float32).reshape(-1)
+
+        if self._count == 0:
+            self._matrix = np.zeros((_INITIAL_CAPACITY, vector.shape[0]), np.float32)
+            self._ids = np.zeros((_INITIAL_CAPACITY,), dtype=np.int64)
+        elif self._matrix.shape[1] != vector.shape[0]:
             _LOGGER.warning("Vector length does not match the index, card not indexed")
             return
-        self._matrix = np.vstack([self._matrix, vector])
-        self._ids = np.append(self._ids, np.int64(example_id))
+        elif self._count == self._matrix.shape[0]:
+            self._grow()
+
+        self._matrix[self._count] = vector
+        self._ids[self._count] = example_id
+        self._count += 1
+
+    def _grow(self) -> None:
+        """Double the buffers. The caller holds ``self._lock``."""
+        capacity = self._matrix.shape[0] * 2
+        matrix = np.zeros((capacity, self._matrix.shape[1]), dtype=np.float32)
+        matrix[: self._count] = self._matrix[: self._count]
+        ids = np.zeros((capacity,), dtype=np.int64)
+        ids[: self._count] = self._ids[: self._count]
+        self._matrix = matrix
+        self._ids = ids
 
     # -- Helpers --------------------------------------------------------------
 

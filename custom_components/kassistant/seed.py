@@ -19,7 +19,10 @@ How the sentences become cards:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Coroutine
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,12 +31,20 @@ from hassil.intents import Intents, TextSlotList
 from hassil.recognize import recognize
 from hassil.sample import sample_intents
 from homeassistant.components import conversation
-from homeassistant.components.homeassistant.exposed_entities import async_should_expose
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.homeassistant.exposed_entities import (
+    async_listen_entity_updates,
+    async_should_expose,
+)
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.debounce import Debouncer
+from homeassistant.helpers.start import async_at_started
 
+from .const import DOMAIN, ISSUE_SEED_FAILED
 from .data import KassistantData
-from .store import SOURCE_SEED
+from .embeddings import EmbeddingError
+from .store import SOURCE_SEED, canonical_action
 from .text import normalize
 
 _LOGGER = logging.getLogger(__name__)
@@ -273,14 +284,22 @@ def _expand(
     names: list[str],
     max_sentences: int,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Put the real device names in, and build the action for each sentence."""
+    """Put the real device names in, and build the action for each sentence.
+
+    Templates are the outer loop and names the inner one, so hitting the ceiling
+    costs every device a phrasing rather than costing the last devices all of
+    them. The other way round, a house past the limit would end up with some
+    lamps answering instantly and others never getting a card at all.
+    """
     pairs: list[tuple[str, dict[str, Any]]] = []
 
     for template in generic_templates:
+        if len(pairs) >= max_sentences:
+            break
         pairs.append((template.sentence, _action(template.intent, template.slots)))
 
-    for name in names:
-        for template in entity_templates:
+    for template in entity_templates:
+        for name in names:
             if len(pairs) >= max_sentences:
                 _LOGGER.warning(
                     "Stopped seeding at %d sentences; raise max_sentences to go further",
@@ -314,7 +333,24 @@ async def _store_all(
     language: str,
     pairs: list[tuple[str, dict[str, Any]]],
 ) -> int:
-    """Embed the sentences in batches and write them to the card box."""
+    """Embed the sentences in batches and write them to the card box.
+
+    Sentences already in the box are dropped before anything is embedded. That
+    makes a repeat run cost almost nothing, which is what allows seeding to be
+    kept up to date automatically instead of being a job the user has to start.
+    """
+    known = await hass.async_add_executor_job(data.store.known_keys, language)
+    fresh = [
+        (sentence, action)
+        for sentence, action in pairs
+        if (normalize(sentence), canonical_action(action)) not in known
+    ]
+
+    if len(fresh) != len(pairs):
+        _LOGGER.debug(
+            "Skipping %d sentences that are already stored", len(pairs) - len(fresh)
+        )
+    pairs = fresh
     stored = 0
 
     for start in range(0, len(pairs), EMBED_BATCH):
@@ -356,3 +392,207 @@ def _add(store, utterance, norm, language, action, embedding):
         source=SOURCE_SEED,
         embedding=embedding,
     )
+
+
+# -- Keeping the card box current ---------------------------------------------
+
+# Exposing a handful of devices produces a burst of updates. Waiting a little
+# collapses them into a single seeding run.
+RESEED_COOLDOWN = 30.0
+
+# How many missing vectors to fetch per request when catching up.
+BACKFILL_BATCH = 128
+
+
+class SeedScheduler:
+    """Seeds on startup and again whenever the exposed devices change.
+
+    Seeding is deliberately not something the user has to remember. It only
+    writes cards, it never acts on them -- the agent still obeys its configured
+    mode -- so there is nothing to hold back for. What matters is that it stays
+    current: expose a new lamp and its sentences should appear without anyone
+    having to know that an action exists.
+
+    Repeat runs are cheap because the store is asked which sentences it already
+    has before anything is sent to the embedding service.
+    """
+
+    def __init__(self, hass: HomeAssistant, data: KassistantData) -> None:
+        self._hass = hass
+        self._data = data
+        # The running seeding job, so unloading can wait for it. Without that
+        # the job keeps writing into a card box that teardown has closed.
+        self._task: asyncio.Task[None] | None = None
+        # Something changed while a run was in flight. Dropping it would leave
+        # a device that was exposed mid-run without cards until the next,
+        # unrelated change came along.
+        self._pending = False
+        self._debouncer = Debouncer(
+            hass,
+            _LOGGER,
+            cooldown=RESEED_COOLDOWN,
+            immediate=False,
+            function=self._async_run,
+            background=True,
+        )
+        self._last_names: tuple[str, ...] | None = None
+
+    @callback
+    def async_setup(self) -> list[CALLBACK_TYPE]:
+        """Start listening. Returns the unsubscribe callbacks."""
+        return [
+            async_at_started(self._hass, self._async_started),
+            async_listen_entity_updates(
+                self._hass, conversation.DOMAIN, self._async_exposure_changed
+            ),
+            self._hass.bus.async_listen(
+                er.EVENT_ENTITY_REGISTRY_UPDATED, self._async_registry_changed
+            ),
+        ]
+
+    async def async_shutdown(self) -> None:
+        """Stop seeding and wait for a run in flight.
+
+        Must finish before the store is closed. A seeding job writes in batches,
+        so tearing the database out from under it raises halfway through.
+        """
+        self._debouncer.async_shutdown()
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+        self._task = None
+
+    @callback
+    def _async_started(self, _hass: HomeAssistant) -> None:
+        """Home Assistant has finished starting; entities are known by now.
+
+        Runs straight away rather than through the debouncer -- there is nothing
+        to collapse on a first run, and waiting would only leave the card box
+        empty for no reason.
+        """
+        self._async_schedule(self._async_run(), "kassistant seed on start")
+
+    @callback
+    def _async_exposure_changed(self) -> None:
+        self._async_schedule(self._debouncer.async_call(), "kassistant reseed")
+
+    @callback
+    def _async_registry_changed(self, event: Event) -> None:
+        """A rename or a new alias changes what the user is likely to say."""
+        if event.data.get("action") == "update" and not (
+            {"name", "aliases"} & set(event.data.get("changes") or {})
+        ):
+            return
+        self._async_schedule(self._debouncer.async_call(), "kassistant reseed")
+
+    @callback
+    def _async_schedule(self, coro: Coroutine[Any, Any, None], name: str) -> None:
+        """Run a seeding job in the background, unless one is already going."""
+        if self._task is not None and not self._task.done():
+            coro.close()
+            self._pending = True
+            return
+        self._task = self._hass.async_create_background_task(coro, name)
+
+    async def _async_run(self) -> None:
+        """Seed, then seed again if anything changed while we were busy."""
+        while True:
+            self._pending = False
+            await self._async_run_once()
+            if not self._pending:
+                return
+
+    async def _async_run_once(self) -> None:
+        """Seed, unless nothing about the exposed devices has changed."""
+        names = tuple(async_exposed_names(self._hass))
+        if names == self._last_names:
+            return
+
+        try:
+            async with self._data.seeding:
+                result = await async_seed(self._hass, self._data)
+        except ValueError as err:
+            # No sentences ship for this language. Nothing to retry.
+            _LOGGER.warning("Not seeding: %s", err)
+            self._last_names = names
+            return
+        except Exception:
+            # Ollama may simply be down. Leave _last_names alone so the next
+            # change tries again, and tell the user -- an empty card box is
+            # otherwise invisible, kassistant would just stay slow forever.
+            _LOGGER.exception("Seeding failed")
+            ir.async_create_issue(
+                self._hass,
+                DOMAIN,
+                ISSUE_SEED_FAILED,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_SEED_FAILED,
+            )
+            return
+
+        self._last_names = names
+        if result.stored:
+            _LOGGER.info(
+                "Seeded %d new cards for %d names (%s)",
+                result.stored,
+                result.names,
+                result.language,
+            )
+
+        # Cards stored while the embedding service was down have no vector, and
+        # a later run would skip them as already known. Without this they would
+        # sit in the box unsearchable forever.
+        await self.async_backfill()
+        await self.async_report_health()
+
+    async def async_backfill(self) -> None:
+        """Give vectors to cards that were stored without one."""
+        store = self._data.store
+        filled = 0
+
+        while True:
+            rows = await self._hass.async_add_executor_job(
+                store.examples_without_embedding, BACKFILL_BATCH
+            )
+            if not rows:
+                break
+
+            try:
+                vectors = await self._data.embeddings.embed([r["norm"] for r in rows])
+            except EmbeddingError as err:
+                _LOGGER.debug("Backfilling vectors failed, will retry later: %s", err)
+                return
+
+            for row, vector in zip(rows, vectors, strict=True):
+                await self._hass.async_add_executor_job(
+                    store.set_embedding, row["id"], vector
+                )
+            filled += len(rows)
+
+            if len(rows) < BACKFILL_BATCH:
+                break
+
+        if filled:
+            _LOGGER.info("Filled in vectors for %d cards", filled)
+
+    async def async_report_health(self) -> None:
+        """Raise or clear the repair notice based on what is actually usable.
+
+        Cards without vectors cannot be found, so a box full of them is just as
+        useless as an empty one -- and just as invisible.
+        """
+        stats = await self._hass.async_add_executor_job(self._data.store.stats)
+
+        if stats["examples"] and not stats["indexed"]:
+            ir.async_create_issue(
+                self._hass,
+                DOMAIN,
+                ISSUE_SEED_FAILED,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_SEED_FAILED,
+            )
+        else:
+            ir.async_delete_issue(self._hass, DOMAIN, ISSUE_SEED_FAILED)

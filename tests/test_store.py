@@ -234,3 +234,65 @@ def test_key_order_does_not_create_a_second_card(store) -> None:
 
     assert first == second
     assert store.stats()["examples"] == 1
+
+
+def spread_vector(index: int) -> np.ndarray:
+    """A distinct unit vector per index, so hits can be told apart."""
+    raw = np.zeros(DIM, dtype=np.float32)
+    raw[index % DIM] = 1.0
+    raw[(index * 7) % DIM] += 0.5
+    return raw / np.linalg.norm(raw)
+
+
+def test_index_stays_correct_while_it_grows(store) -> None:
+    """The index buffers grow by doubling rather than by copying every append.
+
+    Growing is where an off-by-one silently loses or duplicates rows, so this
+    walks well past the initial capacity and checks the bookkeeping holds.
+    """
+    total = 700  # past the 256 starting capacity and its first doubling
+
+    for i in range(total):
+        store.add_example(
+            utterance=f"sentence {i}",
+            norm=f"sentence {i}",
+            language="en",
+            action={"type": "actions", "actions": [{"domain": "light", "i": i}]},
+            source=SOURCE_LEARNED,
+            embedding=spread_vector(i),
+        )
+
+    stats = store.stats()
+    assert stats["examples"] == total
+    assert stats["indexed"] == total
+
+
+def test_the_right_card_is_found_after_growth(store) -> None:
+    """A grown buffer must not shuffle ids and vectors apart."""
+    wanted = np.zeros(DIM, dtype=np.float32)
+    wanted[3] = 1.0
+
+    for i in range(400):
+        store.add_example(
+            utterance=f"filler {i}",
+            norm=f"filler {i}",
+            language="en",
+            action={"filler": i},
+            source=SOURCE_LEARNED,
+            embedding=spread_vector(i + 1),
+        )
+    target = store.add_example(
+        utterance="the one",
+        norm="the one",
+        language="en",
+        action=ACTION_LIGHT,
+        source=SOURCE_LEARNED,
+        embedding=wanted,
+    )
+
+    hit = store.search(wanted)
+
+    assert hit is not None
+    assert hit.example_id == target
+    assert hit.utterance == "the one"
+    assert hit.action == ACTION_LIGHT
