@@ -115,12 +115,17 @@ Two diagnostic sensors show whether it is worth switching to active mode:
 | **kassistant recognised** | The share of recent requests it recognised confidently. This is the number to watch. |
 
 The second one counts *decisions*, not executions, so it means the same thing in
-every mode — which is the point of being able to watch before arming anything.
+shadow mode and in active mode — which is the point of being able to watch
+before arming anything.
+
+**It stays unknown in observe mode**, because there the router is never asked at
+all. Reporting zero would read as "recognised nothing" when the truth is "did
+not look". So the sequence is: let it seed itself, switch to **shadow** to start
+measuring, then to **active** once the recognised share stops climbing.
+
 Its `average_score` attribute is the other half: compare it with your configured
 threshold. Far below means the threshold is out of reach; hovering just under it
 means it is set slightly too high.
-
-Switch to active when the recognised share stops climbing.
 
 ## Changing the connection later
 
@@ -140,9 +145,25 @@ decision is more annoying than a slow one. The request is passed on when:
 * Ollama does not answer
 * the stored action cannot be executed
 
-Learning errs the same way: if you follow up immediately in the same
-conversation, the answer probably was not the one you wanted — then nothing is
-learned.
+## Why a learned card has to be said twice
+
+A card kassistant learned by watching only starts answering once the same
+sentence has produced the same action a second time.
+
+That single rule replaces trying to work out whether a follow-up was a
+correction. If the fallback agent gets something wrong once, the card it leaves
+behind is filed and never used — it would take the same mistake twice for the
+same sentence, which does not happen. Anything you actually say regularly earns
+its way in on the second time of asking.
+
+The alternative was guessing from the wording of the next sentence, and that
+guess is neither reliable nor language-independent: "turn the kitchen off"
+followed by "actually turn it on again" is two valid commands, not a
+correction, and the first sentence was never wrong.
+
+Seeded cards are exempt — they come from Home Assistant's curated templates
+rather than from watching an agent guess. The `awaiting_confirmation` attribute
+on the card sensor shows how many are still warming up.
 
 ## Status
 

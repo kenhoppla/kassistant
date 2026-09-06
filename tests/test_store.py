@@ -11,6 +11,8 @@ from module_loader import load
 store_module = load("store")
 Store = store_module.Store
 SOURCE_LEARNED = store_module.SOURCE_LEARNED
+SOURCE_SEED = store_module.SOURCE_SEED
+MIN_LEARNED_WEIGHT = store_module.MIN_LEARNED_WEIGHT
 
 DIM = 8
 
@@ -46,13 +48,18 @@ def store(tmp_path: pathlib.Path):
     s.close()
 
 
-def card(store, sentence: str, vec: np.ndarray, action: dict) -> int:
+def card(store, sentence: str, vec: np.ndarray, action: dict, source=SOURCE_SEED):
+    """A card that may answer straight away, unless a test says otherwise.
+
+    Seeded cards are exempt from the confirmation rule -- they come from Home
+    Assistant's own templates rather than from watching the fallback agent.
+    """
     return store.add_example(
         utterance=sentence,
         norm=sentence.lower(),
         language="en",
         action=action,
-        source=SOURCE_LEARNED,
+        source=source,
         embedding=vec,
     )
 
@@ -158,7 +165,7 @@ def test_card_without_a_vector_stays_out_of_the_index(store) -> None:
         norm="light on",
         language="en",
         action=ACTION_LIGHT,
-        source=SOURCE_LEARNED,
+        source=SOURCE_SEED,
         embedding=None,
     )
 
@@ -172,7 +179,7 @@ def test_a_missing_vector_can_be_filled_in_later(store) -> None:
         norm="light on",
         language="en",
         action=ACTION_LIGHT,
-        source=SOURCE_LEARNED,
+        source=SOURCE_SEED,
     )
 
     store.set_embedding(example_id, LIGHT_ON)
@@ -258,7 +265,7 @@ def test_index_stays_correct_while_it_grows(store) -> None:
             norm=f"sentence {i}",
             language="en",
             action={"type": "actions", "actions": [{"domain": "light", "i": i}]},
-            source=SOURCE_LEARNED,
+            source=SOURCE_SEED,
             embedding=spread_vector(i),
         )
 
@@ -278,7 +285,7 @@ def test_the_right_card_is_found_after_growth(store) -> None:
             norm=f"filler {i}",
             language="en",
             action={"filler": i},
-            source=SOURCE_LEARNED,
+            source=SOURCE_SEED,
             embedding=spread_vector(i + 1),
         )
     target = store.add_example(
@@ -286,7 +293,7 @@ def test_the_right_card_is_found_after_growth(store) -> None:
         norm="the one",
         language="en",
         action=ACTION_LIGHT,
-        source=SOURCE_LEARNED,
+        source=SOURCE_SEED,
         embedding=wanted,
     )
 
@@ -296,3 +303,112 @@ def test_the_right_card_is_found_after_growth(store) -> None:
     assert hit.example_id == target
     assert hit.utterance == "the one"
     assert hit.action == ACTION_LIGHT
+
+
+# -- Confirmation before a learned card may answer ----------------------------
+
+
+def test_a_learned_card_does_not_answer_the_first_time(store) -> None:
+    """This is what replaced guessing whether a follow-up was a correction.
+
+    If the fallback agent gets something wrong once, the card it leaves behind
+    is never used. Being wrong twice for the same sentence does not happen in
+    practice, so no heuristic is needed to spot the mistake.
+    """
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+
+    assert store.search(LIGHT_ON) is None
+
+
+def test_saying_it_again_confirms_the_card(store) -> None:
+    """What the user really says regularly earns its way in on the second time."""
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+
+    hit = store.search(LIGHT_ON)
+
+    assert hit is not None
+    assert hit.action == ACTION_LIGHT
+
+
+def test_confirmation_takes_effect_without_a_restart(store) -> None:
+    """The promotion happens in the live index, not just in the database."""
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+    assert store.search(LIGHT_ON) is None
+
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+
+    assert store.search(LIGHT_ON) is not None
+
+
+def test_confirmation_survives_a_restart(tmp_path: pathlib.Path) -> None:
+    path = str(tmp_path / "confirm.db")
+
+    first = Store(path)
+    first.setup()
+    card(first, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+    card(first, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_LEARNED)
+    first.close()
+
+    second = Store(path)
+    second.setup()
+    try:
+        assert second.search(LIGHT_ON) is not None
+    finally:
+        second.close()
+
+
+def test_seeded_cards_answer_immediately(store) -> None:
+    """They come from curated templates, not from watching an agent guess."""
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_SEED)
+
+    assert store.search(LIGHT_ON) is not None
+
+
+def test_an_unconfirmed_card_does_not_hide_a_confirmed_one(store) -> None:
+    """Masking, not filtering after the fact.
+
+    A near-perfect unconfirmed match must not shadow the slightly more distant
+    card that is actually allowed to answer.
+    """
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_SEED)
+    card(store, "Light on please", LIGHT_ON_SIMILAR, ACTION_COVER, SOURCE_LEARNED)
+
+    hit = store.search(LIGHT_ON_SIMILAR)
+
+    assert hit is not None
+    assert hit.action == ACTION_LIGHT
+
+
+def test_cards_awaiting_confirmation_are_counted(store) -> None:
+    """The diagnostic sensor shows how many are still warming up."""
+    card(store, "Light on", LIGHT_ON, ACTION_LIGHT, source=SOURCE_SEED)
+    card(store, "Blinds up", COVER, ACTION_COVER, source=SOURCE_LEARNED)
+
+    stats = store.card_stats()
+
+    assert stats["total"] == 2
+    assert stats["awaiting_confirmation"] == 1
+
+
+def test_reindexing_a_card_does_not_duplicate_it(store) -> None:
+    """Setting a vector twice must replace it, not add a second row.
+
+    An orphaned row would stay in the index with a stale vector and could keep
+    winning matches for a card whose content has moved on.
+    """
+    example_id = store.add_example(
+        utterance="Light on",
+        norm="light on",
+        language="en",
+        action=ACTION_LIGHT,
+        source=SOURCE_SEED,
+    )
+
+    store.set_embedding(example_id, LIGHT_ON)
+    store.set_embedding(example_id, COVER)
+
+    assert store.stats()["indexed"] == 1
+    # The second vector is the one that counts.
+    assert store.search(COVER).example_id == example_id
+    assert store.search(LIGHT_ON) is None or store.search(LIGHT_ON).score < 0.5

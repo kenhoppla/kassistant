@@ -46,7 +46,6 @@ async def entry(hass: HomeAssistant, custom_integration, embed_mock) -> MockConf
             "mode": "observe",
             "threshold": 0.92,
             "learn": True,
-            "learn_delay": 0,
         },
     )
     entry.add_to_hass(hass)

@@ -93,7 +93,6 @@ async def setup_kassistant(hass: HomeAssistant, **options: object) -> MockConfig
             "mode": "observe",
             "threshold": 0.92,
             "learn": True,
-            "learn_delay": 0,
             **options,
         },
     )
@@ -104,11 +103,7 @@ async def setup_kassistant(hass: HomeAssistant, **options: object) -> MockConfig
 
 
 async def say(hass: HomeAssistant, text: str) -> conversation.ConversationResult:
-    """Speak to kassistant, then let the deferred learning job run.
-
-    Learning waits a moment for the user to object, so the test has to move the
-    clock past that before checking what was remembered.
-    """
+    """Speak to kassistant and let the learning finish."""
     result = await conversation.async_converse(
         hass,
         text=text,
@@ -117,8 +112,6 @@ async def say(hass: HomeAssistant, text: str) -> conversation.ConversationResult
         language="en",
         agent_id="conversation.kassistant",
     )
-    await hass.async_block_till_done()
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=60))
     await hass.async_block_till_done()
     return result
 
@@ -185,32 +178,51 @@ def _learned_cards(store) -> list:
 # -- Answering from the card box ----------------------------------------------
 
 
-async def test_a_learned_sentence_is_answered_without_the_fallback(
+async def test_a_card_answers_only_after_it_is_confirmed(
     hass: HomeAssistant, custom_integration, embed_mock, calls
 ) -> None:
-    """The payoff: the second time, kassistant does it itself.
+    """Saying it once files the card; saying it twice puts it to work.
 
-    Proven through the decision log rather than by timing, so it cannot pass by
-    accident on a fast machine.
+    This is what replaced guessing whether a follow-up was a correction. A
+    one-off mistake by the fallback agent leaves a card that is never used, so
+    nothing has to be judged in the moment.
     """
-    entry = await setup_kassistant(hass)
+    entry = await setup_kassistant(hass, mode="active")
     sentence = f"turn on {LIGHT_NAME}"
 
-    await say(hass, sentence)  # learned via the fallback
-    assert await hass.async_add_executor_job(_learned_cards, entry.runtime_data.store)
+    await say(hass, sentence)
+    first = await hass.async_add_executor_job(_last_decision, entry.runtime_data.store)
+    assert first["tier"] != "fastpath", "an unconfirmed card must not answer"
 
-    hass.config_entries.async_update_entry(
-        entry, options={**entry.options, "mode": "active"}
-    )
-    await hass.async_block_till_done()
+    await say(hass, sentence)
     calls.clear()
 
     await say(hass, sentence)
 
-    assert calls, "the card was not actually executed"
+    assert calls, "the confirmed card was not executed"
     last = await hass.async_add_executor_job(_last_decision, entry.runtime_data.store)
     assert last["tier"] == "fastpath"
     assert last["executed"] == 1
+
+
+async def test_a_one_off_mistake_is_filed_but_never_used(
+    hass: HomeAssistant, custom_integration, embed_mock, calls
+) -> None:
+    """The safety property, stated directly.
+
+    Whatever the fallback agent did once, kassistant will not repeat it on its
+    own. It would take the same wrong answer to the same sentence twice.
+    """
+    entry = await setup_kassistant(hass, mode="active")
+    store = entry.runtime_data.store
+
+    await say(hass, f"turn on {LIGHT_NAME}")
+
+    learned = await hass.async_add_executor_job(_learned_cards, store)
+    assert learned, "it should still be filed"
+
+    stats = await hass.async_add_executor_job(store.card_stats)
+    assert stats["awaiting_confirmation"] >= 1
 
 
 async def test_an_unknown_sentence_is_passed_on_rather_than_guessed(
@@ -226,14 +238,26 @@ async def test_an_unknown_sentence_is_passed_on_rather_than_guessed(
     assert last["executed"] == 0
 
 
-async def test_a_follow_up_cancels_learning(
+def _last_decision(store):
+    connection = store._require_conn()
+    with store._lock:
+        return connection.execute(
+            "SELECT * FROM decisions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+
+async def test_a_second_command_does_not_undo_the_first(
     hass: HomeAssistant, custom_integration, embed_mock, calls
 ) -> None:
-    """Correcting yourself means the first answer was wrong; learn nothing.
+    """Two valid commands in a row must both be learned.
 
-    A missing card only costs time, a wrong one costs trust.
+    An earlier version waited before storing a card and dropped it if anything
+    else was said in the same conversation. That threw away perfectly good
+    cards: "turn the kitchen on" followed by "and turn it off again" is a change
+    of mind, and the first sentence really did mean what it said. This guards
+    against reintroducing that.
     """
-    entry = await setup_kassistant(hass, learn_delay=60)
+    entry = await setup_kassistant(hass)
     store = entry.runtime_data.store
 
     result = await conversation.async_converse(
@@ -246,10 +270,9 @@ async def test_a_follow_up_cancels_learning(
     )
     await hass.async_block_till_done()
 
-    # Same conversation, immediately after: the user is correcting themselves.
     await conversation.async_converse(
         hass,
-        text=f"no, turn off {LIGHT_NAME}",
+        text=f"and turn off {LIGHT_NAME}",
         conversation_id=result.conversation_id,
         context=Context(),
         language="en",
@@ -259,14 +282,35 @@ async def test_a_follow_up_cancels_learning(
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=120))
     await hass.async_block_till_done()
 
-    learned = await hass.async_add_executor_job(_learned_cards, store)
-    utterances = {row["utterance"] for row in learned}
-    assert f"turn on {LIGHT_NAME}" not in utterances
+    utterances = {
+        row["utterance"]
+        for row in await hass.async_add_executor_job(_learned_cards, store)
+    }
+    assert f"turn on {LIGHT_NAME}" in utterances
 
 
-def _last_decision(store):
-    connection = store._require_conn()
-    with store._lock:
-        return connection.execute(
-            "SELECT * FROM decisions ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+async def test_shadow_mode_does_not_relearn_what_is_already_known(
+    hass: HomeAssistant, custom_integration, embed_mock, calls
+) -> None:
+    """A second card for the same sentence could never be confirmed.
+
+    In shadow mode every request still goes to the fallback agent, even the ones
+    the router recognised. Storing those again would leave a duplicate that sits
+    in awaiting_confirmation forever, because the card that already answers
+    keeps winning the match.
+    """
+    entry = await setup_kassistant(hass, mode="shadow")
+    store = entry.runtime_data.store
+    sentence = f"turn on {LIGHT_NAME}"
+
+    # Two passes to file the card and confirm it.
+    await say(hass, sentence)
+    await say(hass, sentence)
+    confirmed = await hass.async_add_executor_job(store.card_stats)
+
+    # A third pass: the router now recognises it, shadow mode still delegates.
+    await say(hass, sentence)
+    after = await hass.async_add_executor_job(store.card_stats)
+
+    assert after["total"] == confirmed["total"], "a duplicate card was stored"
+    assert after["awaiting_confirmation"] == confirmed["awaiting_confirmation"]

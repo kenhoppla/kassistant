@@ -77,7 +77,6 @@ async def seeded_hass(
             "mode": "observe",
             "threshold": 0.92,
             "learn": False,
-            "learn_delay": 0,
         },
     )
     config_entry.add_to_hass(hass)
@@ -198,7 +197,6 @@ async def test_a_failed_seeding_run_tells_the_user(
             "mode": "observe",
             "threshold": 0.92,
             "learn": False,
-            "learn_delay": 0,
         },
     )
     config_entry.add_to_hass(hass)
@@ -234,7 +232,6 @@ async def test_vectors_are_filled_in_after_the_service_recovers(
             "mode": "observe",
             "threshold": 0.92,
             "learn": False,
-            "learn_delay": 0,
         },
     )
     config_entry.add_to_hass(hass)

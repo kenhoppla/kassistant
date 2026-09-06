@@ -55,7 +55,6 @@ async def entry(hass: HomeAssistant, custom_integration, embed_mock) -> MockConf
             "mode": "observe",
             "threshold": 0.92,
             "learn": False,
-            "learn_delay": 0,
         },
     )
     config_entry.add_to_hass(hass)
@@ -94,13 +93,14 @@ async def test_the_recognition_sensor_starts_empty(hass: HomeAssistant, entry) -
     assert state.attributes["recognised"] == 0
 
 
-async def test_the_recognition_sensor_counts_decisions(
+async def test_observe_mode_reports_unknown_rather_than_zero(
     hass: HomeAssistant, entry
 ) -> None:
-    """It must count decisions, not executions.
+    """In observe mode the router is never asked, so there is nothing to report.
 
-    Otherwise the number would read zero in observe and shadow mode, which is
-    exactly when the user needs it to decide whether to arm the fast path.
+    Reporting zero percent would read as "recognised nothing" when the truth is
+    "did not look" -- and would make the number useless for the one decision it
+    exists for.
     """
     from homeassistant.core import Context
 
@@ -116,6 +116,33 @@ async def test_the_recognition_sensor_counts_decisions(
     await entry.runtime_data.coordinator.async_refresh()
 
     state = hass.states.get("sensor.kassistant_recognised")
+    assert state.state == "unknown"
+    assert state.attributes["sampled"] == 0
+    assert state.attributes["not_measured"] >= 1
+
+
+async def test_shadow_mode_makes_the_number_real(hass: HomeAssistant, entry) -> None:
+    """Shadow mode is where the number starts meaning something."""
+    from homeassistant.core import Context
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "mode": "shadow"}
+    )
+    await hass.async_block_till_done()
+
+    await conversation.async_converse(
+        hass,
+        text="something nobody has said before",
+        conversation_id=None,
+        context=Context(),
+        language="en",
+        agent_id="conversation.kassistant",
+    )
+    await hass.async_block_till_done()
+    await entry.runtime_data.coordinator.async_refresh()
+
+    state = hass.states.get("sensor.kassistant_recognised")
+    assert state.state != "unknown"
     assert state.attributes["sampled"] >= 1
     assert state.attributes["by_outcome"]
 
