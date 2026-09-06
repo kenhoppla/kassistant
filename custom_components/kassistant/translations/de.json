@@ -69,6 +69,10 @@
     "seed_failed": {
       "title": "kassistant konnte den Karteikasten nicht füllen",
       "description": "kassistant füllt seinen Karteikasten aus den Beispielsätzen, die Home Assistant mitbringt — der Versuch ist fehlgeschlagen, meist weil der Embedding-Dienst nicht erreichbar ist.\n\nPrüfe, ob Ollama unter der eingetragenen Adresse läuft und das Embedding-Modell geladen ist. Solange das nicht klappt, hat kassistant nichts zum Nachschlagen und jede Anfrage geht an deinen langsamen Fallback-Agenten.\n\nEs versucht es von selbst erneut, sobald sich deine freigegebenen Geräte ändern — oder du führst die Aktion **kassistant: Seed the card box** aus."
+    },
+    "duplicate_entries": {
+      "title": "kassistant ist mehrfach eingerichtet",
+      "description": "kassistant ist {count}-mal eingerichtet. Jede Kopie schreibt in denselben Karteikasten, führt aber einen eigenen Suchindex — keine sieht also, was die andere lernt.\n\nSchlimmer noch: Einstellungen gelten pro Eintrag. Stellst du bei einem die Betriebsart um, bleiben die anderen unberührt — und ausgerechnet der, den deine Sprachpipeline benutzt, ist womöglich nicht der, den du geändert hast.\n\nGeh zu Einstellungen → Geräte & Dienste → kassistant und lösche alle bis auf einen. Deine Karteikarten liegen in einer Datei und bleiben erhalten — schau vorher nach, auf welchen Agenten dein Sprachassistent zeigt, und behalte den."
     }
   },
   "entity": {

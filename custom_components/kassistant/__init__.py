@@ -12,9 +12,11 @@ from homeassistant.core import (
     ServiceCall,
     ServiceResponse,
     SupportsResponse,
+    callback,
 )
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -25,6 +27,7 @@ from .const import (
     DB_FILENAME,
     DEFAULT_THRESHOLD,
     DOMAIN,
+    ISSUE_DUPLICATE_ENTRIES,
 )
 from .coordinator import KassistantCoordinator
 from .data import KassistantData
@@ -116,6 +119,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: KassistantConfigEntry) -
     for unsubscribe in scheduler.async_setup():
         entry.async_on_unload(unsubscribe)
 
+    _async_check_for_duplicates(hass)
+
     stats = await hass.async_add_executor_job(store.stats)
     _LOGGER.info(
         "kassistant ready: %d cards, %d of them searchable, %d decisions logged",
@@ -124,6 +129,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: KassistantConfigEntry) -
         stats["decisions"],
     )
     return True
+
+
+@callback
+def _async_check_for_duplicates(hass: HomeAssistant) -> None:
+    """Warn when kassistant is set up more than once.
+
+    Only one entry is allowed now, but that guard cannot remove entries added
+    before it existed. Two of them share a single card box file while keeping
+    separate in-memory indexes, so each is blind to what the other writes -- and
+    worse, settings changed on one quietly do not apply to the other, which is
+    almost impossible to work out from the outside.
+    """
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if len(entries) > 1:
+        _LOGGER.warning(
+            "kassistant is set up %d times. They share one card box but not one "
+            "index, and settings apply per entry. Remove all but one.",
+            len(entries),
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_DUPLICATE_ENTRIES,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_DUPLICATE_ENTRIES,
+            translation_placeholders={"count": str(len(entries))},
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_DUPLICATE_ENTRIES)
 
 
 def _async_register_services(hass: HomeAssistant, entry: KassistantConfigEntry) -> None:

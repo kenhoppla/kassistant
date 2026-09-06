@@ -189,3 +189,25 @@ async def test_the_sensor_names_come_from_translations(
     assert (
         registry.async_get("sensor.kassistant_recognised").translation_key == "handled"
     )
+
+
+async def test_the_sensor_says_which_mode_it_measured_in(
+    hass: HomeAssistant, entry
+) -> None:
+    """ "Unknown" has two very different causes.
+
+    Either nothing has been asked yet, or the mode never consults the card box
+    at all. Without the mode on display those look identical, and the honest
+    reading is indistinguishable from a broken sensor.
+    """
+    state = hass.states.get("sensor.kassistant_recognised")
+    assert state.attributes["mode"] == "observe"
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "mode": "shadow"}
+    )
+    await hass.async_block_till_done()
+    await entry.runtime_data.coordinator.async_refresh()
+
+    state = hass.states.get("sensor.kassistant_recognised")
+    assert state.attributes["mode"] == "shadow"

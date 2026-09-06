@@ -69,6 +69,10 @@
     "seed_failed": {
       "title": "kassistant could not fill its card box",
       "description": "kassistant fills its card box from Home Assistant's own example sentences, but the attempt failed — usually because the embedding service is unreachable.\n\nCheck that Ollama is running at the configured address and that the embedding model is pulled. Until this works kassistant has nothing to look up, so every request goes to your slow fallback agent.\n\nIt retries by itself whenever your exposed devices change, or you can run the action **kassistant: Seed the card box**."
+    },
+    "duplicate_entries": {
+      "title": "kassistant is set up more than once",
+      "description": "kassistant is configured {count} times. Every copy writes into the same card box but keeps its own search index, so each one is blind to what the others learn.\n\nWorse, settings apply per entry: switching the mode on one leaves the others untouched, and the one your voice pipeline actually uses may not be the one you changed.\n\nGo to Settings → Devices & Services → kassistant and remove all but one. Your cards are stored in a file and survive this — check first which agent your voice assistant points at, and keep that one."
     }
   },
   "entity": {

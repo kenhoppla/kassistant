@@ -48,6 +48,11 @@ DB_FILENAME: Final = "kassistant.db"
 # embedding service is unreachable, which the user has to fix.
 ISSUE_SEED_FAILED: Final = "seed_failed"
 
+# Raised when more than one entry exists. They share a single card box file but
+# keep separate in-memory indexes, so each is blind to what the other writes --
+# and settings changed on one silently do not apply to the other.
+ISSUE_DUPLICATE_ENTRIES: Final = "duplicate_entries"
+
 # Service calls in these domains never count as a learned action. They are the
 # side noise of speaking a reply, not something the user asked for.
 IGNORED_ACTION_DOMAINS: Final = frozenset(

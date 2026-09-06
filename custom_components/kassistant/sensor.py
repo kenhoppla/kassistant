@@ -23,6 +23,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import CONF_MODE, DEFAULT_MODE
 from .coordinator import KassistantCoordinator
 from .entity import device_info
 
@@ -123,6 +124,10 @@ class HandledSensor(_Base):
             return {}
         decisions = self.coordinator.data["decisions"]
         return {
+            # Shown because "unknown" has two very different causes: observe
+            # mode never consults the card box, so there is nothing to measure.
+            # Without this the reading looks the same as a broken sensor.
+            "mode": self._entry.options.get(CONF_MODE, DEFAULT_MODE),
             "sampled": decisions["sampled"],
             "recognised": decisions["handled"],
             # Requests made while the router was switched off entirely. While
