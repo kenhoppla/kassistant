@@ -31,6 +31,17 @@ _LOGGER = logging.getLogger(__name__)
 SOURCE_LEARNED = "learned"
 SOURCE_SEED = "seed"
 
+# How often a sentence has to produce the same action before that card is
+# allowed to answer on its own.
+#
+# This is what stands in for guessing whether a follow-up was a correction. If
+# the fallback agent gets something wrong once, the card it leaves behind has a
+# weight of one and is never used -- it would take the same mistake twice for
+# the same sentence. Anything the user actually says regularly crosses the line
+# on the second time of asking. Seeded cards are exempt: they come from Home
+# Assistant's own curated templates, not from a guess.
+MIN_LEARNED_WEIGHT = 2.0
+
 # Starting size of the index buffers; they double from here.
 _INITIAL_CAPACITY = 256
 
@@ -76,6 +87,15 @@ CREATE INDEX IF NOT EXISTS decisions_ts ON decisions (ts);
 """
 
 
+def is_eligible(source: str, weight: float) -> bool:
+    """May this card answer on its own?
+
+    Seeded cards always may. A learned one has to have been confirmed by the
+    same sentence producing the same action again.
+    """
+    return source == SOURCE_SEED or weight >= MIN_LEARNED_WEIGHT
+
+
 def canonical_action(action: Any) -> str:
     """Render an action as a stable string so duplicate cards are recognised."""
     return json.dumps(action, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -106,7 +126,13 @@ class Store:
         # database writes themselves.
         self._ids: np.ndarray = np.zeros((0,), dtype=np.int64)
         self._matrix: np.ndarray = np.zeros((0, 0), dtype=np.float32)
+        # Whether each indexed row may answer yet. Kept beside the vectors so a
+        # search masks them out instead of finding them and rejecting them.
+        self._eligible: np.ndarray = np.zeros((0,), dtype=bool)
         self._count = 0
+        # example id -> row in the index, so a card that gains weight can be
+        # promoted without rebuilding everything.
+        self._position: dict[int, int] = {}
 
     # -- Lifecycle ------------------------------------------------------------
 
@@ -162,7 +188,18 @@ class Store:
                     (existing["id"],),
                 )
                 conn.commit()
-                return int(existing["id"])
+                example_id = int(existing["id"])
+
+                # The repeat may be what confirms this card. Promote it in place
+                # rather than waiting for the next restart to rebuild the index.
+                row = conn.execute(
+                    "SELECT source, weight FROM examples WHERE id = ?", (example_id,)
+                ).fetchone()
+                position = self._position.get(example_id)
+                if position is not None and is_eligible(row["source"], row["weight"]):
+                    self._eligible[position] = True
+
+                return example_id
 
             cursor = conn.execute(
                 """
@@ -176,7 +213,9 @@ class Store:
             example_id = int(cursor.lastrowid)
 
             if blob is not None and embedding is not None:
-                self._append_to_index(example_id, embedding)
+                self._append_to_index(
+                    example_id, embedding, eligible=is_eligible(source, 1.0)
+                )
 
         return example_id
 
@@ -268,7 +307,13 @@ class Store:
                 return None
 
             scores = self._matrix[: self._count] @ vector.astype(np.float32)
+            # Cards awaiting confirmation are masked out rather than found and
+            # then rejected: an unconfirmed near-match must not hide a confirmed
+            # one that sits slightly further away.
+            scores = np.where(self._eligible[: self._count], scores, -np.inf)
             best = int(np.argmax(scores))
+            if not np.isfinite(scores[best]):
+                return None
             example_id = int(self._ids[best])
             score = float(scores[best])
 
@@ -339,21 +384,29 @@ class Store:
                 (window,),
             ).fetchall()
 
-        if not rows:
-            return {"sampled": 0, "handled": 0, "handled_pct": None, "avg_score": None}
-
         tiers: dict[str, int] = {}
         for row in rows:
             tiers[row["tier"]] = tiers.get(row["tier"], 0) + 1
 
+        # In observe mode the router is never asked, so those requests say
+        # nothing about how well it recognises. Counting them would report a
+        # steady zero percent -- which reads as "recognised nothing" when the
+        # truth is "did not look", and makes the number useless for the one
+        # thing it exists for: deciding when to switch the mode.
+        measured = [row for row in rows if row["tier"] != "observe"]
         handled = tiers.get("fastpath", 0)
-        scores = [row["score"] for row in rows if row["score"] is not None]
-        latencies = [row["latency_ms"] for row in rows if row["latency_ms"] is not None]
+        scores = [row["score"] for row in measured if row["score"] is not None]
+        latencies = [
+            row["latency_ms"] for row in measured if row["latency_ms"] is not None
+        ]
 
         return {
-            "sampled": len(rows),
+            "sampled": len(measured),
+            "not_measured": len(rows) - len(measured),
             "handled": handled,
-            "handled_pct": round(100 * handled / len(rows), 1),
+            "handled_pct": round(100 * handled / len(measured), 1)
+            if measured
+            else None,
             "avg_score": round(sum(scores) / len(scores), 3) if scores else None,
             "avg_latency_ms": round(sum(latencies) / len(latencies))
             if latencies
@@ -369,10 +422,12 @@ class Store:
                 "SELECT source, COUNT(*) AS n FROM examples GROUP BY source"
             ).fetchall()
             indexed = self._count
+            awaiting = int(np.count_nonzero(~self._eligible[: self._count]))
         by_source = {row["source"]: row["n"] for row in rows}
         return {
             "total": sum(by_source.values()),
             "searchable": indexed,
+            "awaiting_confirmation": awaiting,
             "by_source": by_source,
         }
 
@@ -393,7 +448,14 @@ class Store:
                 (embedding.astype(np.float32).tobytes(), example_id),
             )
             conn.commit()
-            self._append_to_index(example_id, embedding)
+            row = conn.execute(
+                "SELECT source, weight FROM examples WHERE id = ?", (example_id,)
+            ).fetchone()
+            self._append_to_index(
+                example_id,
+                embedding,
+                eligible=is_eligible(row["source"], row["weight"]),
+            )
 
     # -- Index ----------------------------------------------------------------
 
@@ -404,19 +466,23 @@ class Store:
         """
         conn = self._require_conn()
         rows = conn.execute(
-            "SELECT id, embedding FROM examples WHERE embedding IS NOT NULL ORDER BY id"
+            "SELECT id, embedding, source, weight FROM examples "
+            "WHERE embedding IS NOT NULL ORDER BY id"
         ).fetchall()
+
+        self._position = {}
 
         if not rows:
             self._ids = np.zeros((0,), dtype=np.int64)
             self._matrix = np.zeros((0, 0), dtype=np.float32)
+            self._eligible = np.zeros((0,), dtype=bool)
             self._count = 0
             return
 
         vectors = [np.frombuffer(row["embedding"], dtype=np.float32) for row in rows]
         dimension = vectors[0].shape[0]
         keep = [
-            (row["id"], vec)
+            (row, vec)
             for row, vec in zip(rows, vectors, strict=True)
             if vec.shape[0] == dimension
         ]
@@ -427,17 +493,33 @@ class Store:
                 len(rows) - len(keep),
             )
 
-        self._ids = np.asarray([i for i, _ in keep], dtype=np.int64)
-        self._matrix = np.vstack([v for _, v in keep]).astype(np.float32)
+        self._ids = np.asarray([row["id"] for row, _ in keep], dtype=np.int64)
+        self._matrix = np.vstack([vec for _, vec in keep]).astype(np.float32)
+        self._eligible = np.asarray(
+            [is_eligible(row["source"], row["weight"]) for row, _ in keep], dtype=bool
+        )
         self._count = len(keep)
+        self._position = {int(row["id"]): i for i, (row, _) in enumerate(keep)}
 
-    def _append_to_index(self, example_id: int, embedding: np.ndarray) -> None:
+    def _append_to_index(
+        self, example_id: int, embedding: np.ndarray, *, eligible: bool
+    ) -> None:
         """Append one vector to the index. The caller holds ``self._lock``."""
         vector = embedding.astype(np.float32).reshape(-1)
+
+        # A card that is already indexed is updated in place. Appending again
+        # would leave the earlier row orphaned but still searchable, so a stale
+        # vector could keep winning matches for a card that has moved on.
+        if (position := self._position.get(example_id)) is not None:
+            if self._matrix.shape[1] == vector.shape[0]:
+                self._matrix[position] = vector
+                self._eligible[position] = eligible
+            return
 
         if self._count == 0:
             self._matrix = np.zeros((_INITIAL_CAPACITY, vector.shape[0]), np.float32)
             self._ids = np.zeros((_INITIAL_CAPACITY,), dtype=np.int64)
+            self._eligible = np.zeros((_INITIAL_CAPACITY,), dtype=bool)
         elif self._matrix.shape[1] != vector.shape[0]:
             _LOGGER.warning("Vector length does not match the index, card not indexed")
             return
@@ -446,6 +528,8 @@ class Store:
 
         self._matrix[self._count] = vector
         self._ids[self._count] = example_id
+        self._eligible[self._count] = eligible
+        self._position[example_id] = self._count
         self._count += 1
 
     def _grow(self) -> None:
@@ -455,8 +539,11 @@ class Store:
         matrix[: self._count] = self._matrix[: self._count]
         ids = np.zeros((capacity,), dtype=np.int64)
         ids[: self._count] = self._ids[: self._count]
+        eligible = np.zeros((capacity,), dtype=bool)
+        eligible[: self._count] = self._eligible[: self._count]
         self._matrix = matrix
         self._ids = ids
+        self._eligible = eligible
 
     # -- Helpers --------------------------------------------------------------
 

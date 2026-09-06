@@ -87,14 +87,19 @@ class CardsSensor(_Base):
             "searchable": cards["searchable"],
             "seeded": by_source.get("seed", 0),
             "learned": by_source.get("learned", 0),
+            # Learned cards are filed at once but only answer after the same
+            # sentence has produced the same action a second time.
+            "awaiting_confirmation": cards["awaiting_confirmation"],
         }
 
 
 class HandledSensor(_Base):
     """Share of recent requests kassistant recognised confidently.
 
-    Counts decisions, not executions -- so the number means the same thing
-    before and after you switch the mode to active.
+    Counts decisions, not executions -- so the number means the same thing in
+    shadow mode and in active mode. In observe mode the router is not consulted
+    at all, so there is nothing to report and the sensor stays unknown rather
+    than claiming zero.
     """
 
     _attr_translation_key = "handled"
@@ -120,6 +125,9 @@ class HandledSensor(_Base):
         return {
             "sampled": decisions["sampled"],
             "recognised": decisions["handled"],
+            # Requests made while the router was switched off entirely. While
+            # this is the only number moving, the percentage stays unknown.
+            "not_measured": decisions.get("not_measured", 0),
             # The best similarity found per request, averaged. Compare it with
             # the configured threshold: far below means the threshold is out of
             # reach, hovering just under means it is set slightly too high.

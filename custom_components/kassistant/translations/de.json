@@ -47,13 +47,11 @@
         "data": {
           "mode": "Betriebsart",
           "threshold": "Sicherheitsschwelle",
-          "learn": "Vom Fallback-Agenten lernen",
-          "learn_delay": "Wartezeit vor dem Lernen"
+          "learn": "Vom Fallback-Agenten lernen"
         },
         "data_description": {
           "threshold": "Wie ähnlich ein Satz einer bekannten Karte sein muss, damit kassistant selbst handelt. Höher heißt vorsichtiger.",
-          "learn": "Schreibt mit, welche Aktionen der Fallback-Agent auslöst, und legt daraus neue Karteikarten an.",
-          "learn_delay": "Sekunden, die auf einen Widerspruch gewartet wird. Hakst du in dieser Zeit nach, wird nichts gelernt."
+          "learn": "Schreibt mit, welche Aktionen der Fallback-Agent auslöst, und legt daraus neue Karteikarten an."
         }
       }
     }

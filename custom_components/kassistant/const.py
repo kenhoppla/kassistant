@@ -15,7 +15,6 @@ CONF_FALLBACK_AGENT: Final = "fallback_agent"
 CONF_MODE: Final = "mode"
 CONF_THRESHOLD: Final = "threshold"
 CONF_LEARN: Final = "learn"
-CONF_LEARN_DELAY: Final = "learn_delay"
 
 # --- Modes -------------------------------------------------------------------
 # Stage 1: listen and take notes only. Every request is passed through to the
@@ -35,9 +34,6 @@ DEFAULT_EMBED_MODEL: Final = "embeddinggemma"
 DEFAULT_MODE: Final = MODE_OBSERVE
 DEFAULT_THRESHOLD: Final = 0.92
 DEFAULT_LEARN: Final = True
-# Seconds to wait for the user to object before a card is considered good enough
-# to keep.
-DEFAULT_LEARN_DELAY: Final = 25.0
 
 # --- Services ----------------------------------------------------------------
 SERVICE_SEED: Final = "seed"

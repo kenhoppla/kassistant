@@ -47,13 +47,11 @@
         "data": {
           "mode": "Mode",
           "threshold": "Confidence threshold",
-          "learn": "Learn from the fallback agent",
-          "learn_delay": "Wait before learning"
+          "learn": "Learn from the fallback agent"
         },
         "data_description": {
           "threshold": "How similar a sentence must be to a known card before kassistant acts on its own. Higher means more cautious.",
-          "learn": "Records which actions the fallback agent triggers and turns them into new cards.",
-          "learn_delay": "Seconds spent waiting for a correction. If you follow up within that time, nothing is learned."
+          "learn": "Records which actions the fallback agent triggers and turns them into new cards."
         }
       }
     }

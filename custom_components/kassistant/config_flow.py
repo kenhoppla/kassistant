@@ -22,13 +22,11 @@ from .const import (
     CONF_EMBED_URL,
     CONF_FALLBACK_AGENT,
     CONF_LEARN,
-    CONF_LEARN_DELAY,
     CONF_MODE,
     CONF_THRESHOLD,
     DEFAULT_EMBED_MODEL,
     DEFAULT_EMBED_URL,
     DEFAULT_LEARN,
-    DEFAULT_LEARN_DELAY,
     DEFAULT_MODE,
     DEFAULT_THRESHOLD,
     DOMAIN,
@@ -101,7 +99,6 @@ class KassistantConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_MODE: DEFAULT_MODE,
                         CONF_THRESHOLD: DEFAULT_THRESHOLD,
                         CONF_LEARN: DEFAULT_LEARN,
-                        CONF_LEARN_DELAY: DEFAULT_LEARN_DELAY,
                     },
                 )
 
@@ -202,14 +199,6 @@ class KassistantOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_LEARN, default=options.get(CONF_LEARN, DEFAULT_LEARN)
                 ): selector.BooleanSelector(),
-                vol.Required(
-                    CONF_LEARN_DELAY,
-                    default=options.get(CONF_LEARN_DELAY, DEFAULT_LEARN_DELAY),
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0, max=300, step=5, unit_of_measurement="s"
-                    )
-                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -15,7 +15,6 @@ Step 3 is why kassistant gets faster over time.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
@@ -26,14 +25,11 @@ from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import intent
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.event import async_call_later
 
 from .const import (
     CONF_LEARN,
-    CONF_LEARN_DELAY,
     CONF_MODE,
     DEFAULT_LEARN,
-    DEFAULT_LEARN_DELAY,
     DEFAULT_MODE,
     DOMAIN,
     MODE_ACTIVE,
@@ -81,12 +77,6 @@ class KassistantAgent(conversation.ConversationEntity):
         self._entry = entry
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = device_info(entry)
-        # Per conversation, the scheduled learning job, so an immediate
-        # follow-up question can cancel it.
-        self._pending_learn: dict[str, Any] = {}
-        # Learning jobs already running. They write to the card box, so teardown
-        # waits for them -- otherwise they land in a closed database.
-        self._learning: set[asyncio.Task[None]] = set()
 
     @property
     def supported_languages(self) -> list[str] | str:
@@ -112,8 +102,6 @@ class KassistantAgent(conversation.ConversationEntity):
         data = self._data
         mode = self._mode
         language = user_input.language or self.hass.config.language
-
-        self._cancel_pending_learn(user_input.conversation_id)
 
         if mode == MODE_OBSERVE:
             decision = Decision(tier=TIER_OBSERVE)
@@ -299,76 +287,53 @@ class KassistantAgent(conversation.ConversationEntity):
             },
         )
 
-        if observed and self._entry.options.get(CONF_LEARN, DEFAULT_LEARN):
-            # Use the conversation id Home Assistant handed back, not the one
-            # that came in: a first utterance arrives without one, and a
-            # follow-up would then be unable to cancel this.
-            self._schedule_learn(
-                user_input, language, observed, decision_id, result.conversation_id
-            )
+        # Nothing to learn from a sentence the card box already recognises. In
+        # shadow mode every request is passed on even when the router knew the
+        # answer, and storing it again would leave a second card for the same
+        # sentence -- one that can never be confirmed, because the card that
+        # already answers keeps winning the match.
+        already_known = decision.is_fastpath
+        if (
+            observed
+            and not already_known
+            and self._entry.options.get(CONF_LEARN, DEFAULT_LEARN)
+        ):
+            await self._async_learn(user_input, language, observed, decision_id)
 
         return result
 
-    @callback
-    def _schedule_learn(
+    async def _async_learn(
         self,
         user_input: conversation.ConversationInput,
         language: str,
         observed: list[dict[str, Any]],
         decision_id: int,
-        conversation_id: str | None,
     ) -> None:
-        """Remember the sentence -- but only if no objection follows shortly.
+        """Remember what the fallback agent just did.
 
-        If the user says something else in the same conversation right away, the
-        answer probably was not what they wanted. Then we prefer to learn
-        nothing. This is deliberately cautious: a missing card only costs time,
-        a wrong one costs trust.
+        Stored straight away rather than after a pause. Nothing has to be judged
+        here: a card only answers on its own once the same sentence has produced
+        the same action a second time, so a one-off mistake by the fallback agent
+        is filed and never used.
 
-        A one-shot voice command carries no conversation id on the way in, so
-        the key comes from the id Home Assistant assigned on the way out -- that
-        is the one a follow-up will arrive with. The context id is only a last
-        resort, and cancellation cannot work in that case.
+        Awaited rather than run in the background. It costs one embedding call --
+        milliseconds against the seconds the fallback agent just spent -- and in
+        exchange there is no timer to cancel and no job that can outlive the card
+        box it writes into.
         """
-        key = conversation_id or user_input.context.id
-
-        delay = float(self._entry.options.get(CONF_LEARN_DELAY, DEFAULT_LEARN_DELAY))
-        utterance = user_input.text
         action = {"type": ACTION_TYPE_ACTIONS, "actions": observed}
-
-        async def _learn() -> None:
-            example_id = await self._data.router.remember(
-                utterance=utterance,
-                language=language,
-                action=action,
-                source=SOURCE_LEARNED,
-            )
-            _LOGGER.debug("Learned: %r -> %s (card %s)", utterance, action, example_id)
-            if example_id is not None:
-                await self.hass.async_add_executor_job(
-                    self._data.store.attach_observation, decision_id, action
-                )
-
-        @callback
-        def _fire(_now: Any) -> None:
-            # Track the job, because it writes to the card box: teardown has to
-            # be able to wait for it before the database is closed.
-            self._pending_learn.pop(key, None)
-            task = self.hass.async_create_task(_learn(), eager_start=False)
-            self._learning.add(task)
-            task.add_done_callback(self._learning.discard)
-
-        self._pending_learn[key] = async_call_later(self.hass, delay, _fire)
-
-    @callback
-    def _cancel_pending_learn(self, conversation_id: str | None) -> None:
-        """Cancel a scheduled learning job (the user is following up)."""
-        if conversation_id is None:
-            return
-        if (cancel := self._pending_learn.pop(conversation_id, None)) is not None:
-            cancel()
-            _LOGGER.debug(
-                "Follow-up in the same conversation -- previous sentence not learned"
+        example_id = await self._data.router.remember(
+            utterance=user_input.text,
+            language=language,
+            action=action,
+            source=SOURCE_LEARNED,
+        )
+        _LOGGER.debug(
+            "Learned: %r -> %s (card %s)", user_input.text, action, example_id
+        )
+        if example_id is not None:
+            await self.hass.async_add_executor_job(
+                self._data.store.attach_observation, decision_id, action
             )
 
     @callback
@@ -384,20 +349,6 @@ class KassistantAgent(conversation.ConversationEntity):
         return conversation.ConversationResult(
             response=response, conversation_id=user_input.conversation_id
         )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Stop learning and wait for anything already writing.
-
-        Runs before the config entry closes the card box, so a job in flight
-        must finish here rather than into a database that is about to go away.
-        """
-        for cancel in self._pending_learn.values():
-            cancel()
-        self._pending_learn.clear()
-
-        if self._learning:
-            await asyncio.gather(*self._learning, return_exceptions=True)
-            self._learning.clear()
 
 
 def _log_decision(store, fields: dict[str, Any]) -> int:
